@@ -5,7 +5,7 @@ Chức năng:
     - Đọc dữ liệu đã qua bước tạo đặc trưng
     - Chia tập train/validation/test
     - Xây dựng model MLP nhỏ gọn phù hợp TinyML
-    - Huấn luyện, đánh giá và lưu model_fp32.keras + metrics.json
+    - Huấn luyện, đánh giá và lưu model_fp32.keras + metrics.json (kèm precision/recall/AUC)
 
 Dùng:
     python ml/src/train.py
@@ -13,11 +13,17 @@ Dùng:
 
 import json
 import os
+import random
+from typing import Dict
+
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_class_weight
+import tensorflow as tf
 from tensorflow import keras
 
 # =============================================================
@@ -38,6 +44,13 @@ RANDOM_STATE = 42
 # =============================================================
 # Hàm hỗ trợ
 # =============================================================
+def set_global_seed(seed: int) -> None:
+    """Cố định seed cho Python/NumPy/TensorFlow để dễ tái lập kết quả."""
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+
+
 def load_dataset(file_path: str = INPUT_FILE):
     """Đọc và tách dữ liệu thành X, y kèm danh sách cột đặc trưng."""
     if not os.path.exists(file_path):
@@ -72,17 +85,50 @@ def build_tiny_mlp(input_dim: int, n_classes: int = 2):
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=1e-3),
         loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"],
+        metrics=[
+            keras.metrics.SparseCategoricalAccuracy(name="accuracy"),
+            keras.metrics.Precision(name="precision"),
+            keras.metrics.Recall(name="recall"),
+            keras.metrics.AUC(name="auc"),
+        ],
     )
     return model
 
 
-def save_metrics(history: keras.callbacks.History, model: keras.Model, X_test, y_test):
-    """Lưu lại metric (loss, acc, val_acc, test_acc) ra file JSON."""
+def build_class_weights(labels: np.ndarray) -> Dict[int, float]:
+    """Tính class weight cân bằng để xử lý dữ liệu lệch GOOD/BAD."""
+    classes = np.unique(labels)
+    weights = compute_class_weight(class_weight="balanced", classes=classes, y=labels)
+    return {int(cls): float(weight) for cls, weight in zip(classes, weights)}
+
+
+def save_metrics(
+    history: keras.callbacks.History,
+    model: keras.Model,
+    X_test,
+    y_test,
+    class_weights: Dict[int, float],
+):
+    """Lưu lại metric (loss/acc/precision/recall/auc + confusion matrix) ra file JSON."""
     results = {key: [float(v) for v in values] for key, values in history.history.items()}
     test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
     results["test_accuracy"] = float(test_acc)
     results["test_loss"] = float(test_loss)
+
+    proba = model.predict(X_test, verbose=0)
+    preds = np.argmax(proba, axis=1)
+    report = classification_report(
+        y_test,
+        preds,
+        labels=[0, 1],
+        target_names=["BAD", "GOOD"],
+        output_dict=True,
+        zero_division=0,
+    )
+    matrix = confusion_matrix(y_test, preds).tolist()
+    results["classification_report"] = report
+    results["confusion_matrix"] = matrix
+    results["class_weights"] = class_weights
 
     os.makedirs(os.path.dirname(METRICS_OUT), exist_ok=True)
     with open(METRICS_OUT, "w", encoding="utf-8") as fh:
@@ -95,6 +141,8 @@ def save_metrics(history: keras.callbacks.History, model: keras.Model, X_test, y
 # =============================================================
 def train_model():
     """Huấn luyện model MLP và lưu lại model + metrics."""
+    set_global_seed(RANDOM_STATE)
+
     X, y, feature_cols, encoder = load_dataset(INPUT_FILE)
     print(f"Sử dụng {len(feature_cols)} đặc trưng: {feature_cols}")
 
@@ -107,6 +155,9 @@ def train_model():
     )
 
     print(f"Tỉ lệ chia: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
+
+    class_weights = build_class_weights(y_train)
+    print(f"Class weights (train): {class_weights}")
 
     model = build_tiny_mlp(X_train.shape[1])
     callbacks = [
@@ -121,6 +172,7 @@ def train_model():
         batch_size=BATCH_SIZE,
         verbose=1,
         callbacks=callbacks,
+        class_weight=class_weights,
     )
 
     test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
@@ -133,7 +185,7 @@ def train_model():
     joblib.dump({"classes": encoder.classes_, "features": feature_cols}, LABEL_ENCODER_OUT)
     print(f"Đã lưu mapping label tại {LABEL_ENCODER_OUT}")
 
-    save_metrics(history, model, X_test, y_test)
+    save_metrics(history, model, X_test, y_test, class_weights)
 
 
 if __name__ == "__main__":
