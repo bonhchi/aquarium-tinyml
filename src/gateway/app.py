@@ -16,10 +16,35 @@ from .schemas import (
 from .telemetry_store import append_telemetry, query_telemetry
 from .training_data_store import training_data_store
 
-app = FastAPI(title="Aquarium AI Gateway")
+tags_metadata = [
+    {
+        "name": "telemetry",
+        "description": "Ingest và truy vấn dữ liệu cảm biến thô được gửi từ các thiết bị/ESP32.",
+    },
+    {
+        "name": "model",
+        "description": "Quản lý metadata model TinyML (publish, fetch phiên bản hiện tại).",
+    },
+    {
+        "name": "dataset",
+        "description": "Cung cấp dữ liệu đã qua bước tiền xử lý phục vụ training/QA.",
+    },
+    {
+        "name": "system",
+        "description": "Các endpoint hỗ trợ vận hành như healthcheck.",
+    },
+]
+
+app = FastAPI(
+    title="Aquarium AI Gateway",
+    version="0.2.0",
+    description="Gateway phục vụ thu thập telemetry và phân phối TinyML model cho hệ thống nuôi trồng.",
+    openapi_tags=tags_metadata,
+    swagger_ui_parameters={"defaultModelsExpandDepth": 0},
+)
 
 
-@app.post("/ingest/telemetry")
+@app.post("/ingest/telemetry", tags=["telemetry"], summary="Nhận bản ghi telemetry")
 async def ingest_telemetry(payload: TelemetryPayload):
     """
     Gateway tổng gửi dữ liệu nước vào đây.
@@ -28,7 +53,7 @@ async def ingest_telemetry(payload: TelemetryPayload):
     return {"ok": True, "storedIn": str(path)}
 
 
-@app.get("/telemetry")
+@app.get("/telemetry", tags=["telemetry"], summary="Truy vấn telemetry thô")
 async def get_telemetry(filters: TelemetryQuery = Depends()):
     """
     API export telemetry raw để phục vụ dashboard hoặc training.
@@ -43,7 +68,7 @@ async def get_telemetry(filters: TelemetryQuery = Depends()):
     return {"rows": rows, "count": len(rows)}
 
 
-@app.post("/model/publish")
+@app.post("/model/publish", tags=["model"], summary="Publish model mới cho một hồ")
 async def publish_model(body: ModelPublishRequest):
     """
     Training đăng model mới cho 1 hồ cụ thể.
@@ -62,7 +87,7 @@ async def publish_model(body: ModelPublishRequest):
     return {"ok": True, "pondId": body.pondId, "modelId": body.modelId}
 
 
-@app.get("/model/current")
+@app.get("/model/current", tags=["model"], summary="Lấy metadata model hiện hành của hồ")
 async def get_current_model(pondId: str):
     """
     Gateway tổng gọi để lấy model mới nhất cho 1 hồ.
@@ -73,7 +98,7 @@ async def get_current_model(pondId: str):
     return meta
 
 
-@app.get("/dataset/training")
+@app.get("/dataset/training", tags=["dataset"], summary="Xuất dữ liệu training features")
 async def get_training_dataset(query: TrainingDataQuery = Depends()):
     """
     Xuất dữ liệu feature đã dùng để train (đọc từ CSV).
@@ -107,7 +132,7 @@ async def get_training_dataset(query: TrainingDataQuery = Depends()):
     return {"rows": rows, "meta": meta}
 
 
-@app.get("/dataset/training/stats")
+@app.get("/dataset/training/stats", tags=["dataset"], summary="Thống kê file training đang phục vụ")
 async def get_training_dataset_stats():
     """
     Lấy thông tin nhanh về file training đang được gateway phục vụ.
@@ -116,7 +141,7 @@ async def get_training_dataset_stats():
     return stats
 
 
-@app.get("/health")
+@app.get("/health", tags=["system"], summary="Healthcheck chuẩn")
 async def health():
     """
     Healthcheck đơn giản.

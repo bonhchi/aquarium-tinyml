@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -32,7 +32,7 @@ class TelemetryStore:
             ts = int(datetime.utcnow().timestamp())
             payload["timestamp"] = ts
 
-        day = datetime.utcfromtimestamp(ts).strftime("%Y%m%d")
+        day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y%m%d")
         file_path = self.raw_dir / f"{site}_{pond}_{day}.jsonl"
 
         line = json.dumps(payload, separators=(",", ":"))
@@ -98,8 +98,8 @@ class TelemetryStore:
         if end_ts is None:
             end_ts = int(datetime.utcnow().timestamp())
 
-        start_day = datetime.utcfromtimestamp(start_ts).date()
-        end_day = datetime.utcfromtimestamp(end_ts).date()
+        start_day = datetime.fromtimestamp(start_ts, tz=timezone.utc).date()
+        end_day = datetime.fromtimestamp(end_ts, tz=timezone.utc).date()
         if end_day < start_day:
             start_day, end_day = end_day, start_day
 
