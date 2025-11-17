@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from datetime import datetime
+from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FieldValidationInfo,
+    field_validator,
+)
 
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
 
@@ -21,9 +28,7 @@ class TelemetryPayload(BaseModel):
         None, ge=0, description="Unix time (UTC). Nếu bỏ trống sẽ tự động gán"
     )
 
-    class Config:
-        anystr_strip_whitespace = True
-        extra = "allow"
+    model_config = ConfigDict(str_strip_whitespace=True, extra="allow")
 
 
 class TelemetryQuery(BaseModel):
@@ -33,9 +38,12 @@ class TelemetryQuery(BaseModel):
     endTs: Optional[int] = Field(None, ge=0, description="Lọc đến timestamp (<=)")
     limit: int = Field(500, ge=1, le=5000, description="Số record tối đa trả về")
 
-    @validator("endTs")
-    def _validate_range(cls, end_ts: Optional[int], values: Dict[str, Any]):  # type: ignore[override]
-        start_ts = values.get("startTs")
+    @field_validator("endTs")
+    @classmethod
+    def _validate_range(
+        cls, end_ts: Optional[int], info: FieldValidationInfo
+    ):
+        start_ts = info.data.get("startTs")
         if end_ts is not None and start_ts is not None and end_ts < start_ts:
             raise ValueError("endTs must be >= startTs")
         return end_ts
@@ -51,8 +59,9 @@ class ModelPublishRequest(BaseModel):
     thresholds: Dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = ""
 
-    @validator("sha256")
-    def _validate_sha(cls, value: str):  # type: ignore[override]
+    @field_validator("sha256")
+    @classmethod
+    def _validate_sha(cls, value: str):
         if not _SHA256_RE.match(value):
             raise ValueError("sha256 must be 64 hex characters")
         return value
@@ -62,5 +71,32 @@ class TrainingDataQuery(BaseModel):
     label: Optional[str] = Field(None, description="Lọc label (GOOD/BAD)")
     limit: int = Field(500, ge=1, le=5000)
     offset: int = Field(0, ge=0)
-    format: str = Field("json", regex=r"^(json|csv)$")
+    format: str = Field("json", pattern=r"^(json|csv)$")
 
+
+class TrainingJobConfigPayload(BaseModel):
+    datasetFile: Optional[str] = Field(
+        None, description="Đường dẫn CSV features. Mặc định dùng settings.TRAINING_DATA_FILE."
+    )
+    modelOut: Optional[str] = Field(None, description="Đường dẫn lưu model .keras")
+    metricsOut: Optional[str] = Field(None, description="Đường dẫn lưu metrics.json")
+    labelEncoderOut: Optional[str] = Field(None, description="Đường dẫn lưu label_encoder.joblib")
+    epochs: Optional[int] = Field(None, ge=1, le=500, description="Số epoch train")
+    batchSize: Optional[int] = Field(None, ge=1, le=1024)
+    valSize: Optional[float] = Field(None, gt=0, lt=1)
+    testSize: Optional[float] = Field(None, gt=0, lt=1)
+    randomState: Optional[int] = Field(None, description="Seed tái lập kết quả")
+    notes: Optional[str] = Field(None, max_length=500, description="Ghi chú cho job training")
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class TrainingJobInfo(BaseModel):
+    jobId: str
+    status: Literal["pending", "running", "succeeded", "failed"]
+    config: TrainingJobConfigPayload
+    startedAt: Optional[datetime] = None
+    finishedAt: Optional[datetime] = None
+    logPath: str
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None

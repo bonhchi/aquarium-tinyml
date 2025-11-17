@@ -4,5 +4,7 @@ requests>=2.31,<3.0
 pandas>=2.1,<3.0
 numpy>=1.26,<2.0
 scikit-learn>=1.4,<2.0
-tensorflow-cpu>=2.15,<2.16
+tensorflow-macos==2.15.0; sys_platform == "darwin"
+# TensorFlow cho Windows / Linux
+--tensorflow==2.15.0; sys_platform != "darwin"
 joblib>=1.3,<2.0

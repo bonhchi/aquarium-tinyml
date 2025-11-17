@@ -1,0 +1,40 @@
+Aquarium TinyML Gateway – Run Guide
+===================================
+
+Overview
+--------
+These steps start the FastAPI gateway (with Swagger UI) on both macOS and Windows. The API root (`/`) is not defined, so visiting it returns `{\"detail\":\"Not Found\"}`; open `/docs` instead to view Swagger.
+
+Shared prep
+-----------
+1. Install Python 3.11+ (3.12 works fine).
+2. Clone the repo and `cd Aquarium/aquarium-tinyml`.
+3. Optional: copy `.env.example` to `.env` if you need to override default paths/ports.
+4. Thay vì gõ lệnh pip dài, có thể chạy `python install_dependencies.py` (thêm `--gateway` để chỉ cài phần API).
+
+macOS (zsh/bash)
+----------------
+1. Create a virtualenv: `python3.11 -m venv .venv`.
+2. Activate it: `source .venv/bin/activate`.
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements.txt`.
+4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 9000`.
+5. Open Swagger UI at `http://127.0.0.1:9000/docs` (Redoc at `/redoc`).
+
+Windows (PowerShell)
+--------------------
+1. Create venv: `py -3.11 -m venv .venv`.
+2. Activate: `.\.venv\Scripts\Activate.ps1` (allow the script with `Set-ExecutionPolicy -Scope Process RemoteSigned` if needed).
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements.txt`.
+4. Run uvicorn via module form (avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 9000`.
+5. Browse to `http://127.0.0.1:9000/docs` for Swagger.
+
+Troubleshooting
+---------------
+- `{\"detail\":\"Not Found\"}` → you hit `/`; go to `/docs` or `/health`.
+- Missing `uvicorn` → ensure virtualenv activated and dependencies installed.
+- TensorFlow install errors on Python 3.9 → recreate venv with Python 3.11+.
+
+Notes (Tiếng Việt)
+------------------
+- Script `python install_dependencies.py` giúp cài nhanh toàn bộ package; tham số `--gateway` chỉ cài phần API gateway.
+- Swagger hiển thị tại `/docs`; trang `/` sẽ redirect về đây nên thông báo "Not Found" ở root là bình thường.

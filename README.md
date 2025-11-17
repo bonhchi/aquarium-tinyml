@@ -27,5 +27,7 @@ Notes:
   - `GET /telemetry` – retrieve raw JSONL rows for analytics/training.
   - `POST /model/publish` / `GET /model/current` – push & fetch model metadata per pond.
   - `GET /dataset/training[?format=csv]` – export the feature CSV slice that fed training.
+  - `POST /training/start` – kick off a TinyML training job (accepts dataset/model overrides).
+  - `GET /training/jobs` / `/training/jobs/{id}` – follow the progress + fetch log/artifact info.
 
 `src/client/client.py` contains a minimal helper to publish new model artifacts to the gateway.

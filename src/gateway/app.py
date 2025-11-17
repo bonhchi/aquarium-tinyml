@@ -4,7 +4,7 @@ from __future__ import annotations
 import csv
 import io
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
 from .model_store import load_model_meta, save_model_meta
 from .schemas import (
@@ -12,9 +12,14 @@ from .schemas import (
     TelemetryPayload,
     TelemetryQuery,
     TrainingDataQuery,
+    TrainingJobConfigPayload,
+    TrainingJobInfo,
 )
 from .telemetry_store import append_telemetry, query_telemetry
 from .training_data_store import training_data_store
+from .training_jobs import get_job as get_training_job
+from .training_jobs import list_jobs as list_training_jobs
+from .training_jobs import start_training_job
 
 tags_metadata = [
     {
@@ -32,6 +37,10 @@ tags_metadata = [
     {
         "name": "system",
         "description": "Các endpoint hỗ trợ vận hành như healthcheck.",
+    },
+    {
+        "name": "training",
+        "description": "Khởi động và theo dõi job training TinyML.",
     },
 ]
 
@@ -141,9 +150,60 @@ async def get_training_dataset_stats():
     return stats
 
 
+@app.post(
+    "/training/start",
+    tags=["training"],
+    summary="Kích hoạt job training TinyML mới",
+    response_model=TrainingJobInfo,
+)
+async def start_training_job_endpoint(body: TrainingJobConfigPayload):
+    """
+    Tạo job training chạy nền, trả về thông tin job để theo dõi qua API.
+    """
+    job = await start_training_job(body)
+    return job
+
+
+@app.get(
+    "/training/jobs",
+    tags=["training"],
+    summary="Liệt kê các job training gần đây",
+    response_model=list[TrainingJobInfo],
+)
+async def list_training_jobs_endpoint():
+    """
+    Trả về danh sách các job đã chạy kể từ khi gateway khởi động.
+    """
+    return await list_training_jobs()
+
+
+@app.get(
+    "/training/jobs/{job_id}",
+    tags=["training"],
+    summary="Xem chi tiết job training",
+    response_model=TrainingJobInfo,
+)
+async def get_training_job_endpoint(job_id: str):
+    """
+    Chi tiết job cụ thể gồm trạng thái, log file và đường dẫn artifacts.
+    """
+    try:
+        return await get_training_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Training job {job_id} not found") from exc
+
+
 @app.get("/health", tags=["system"], summary="Healthcheck chuẩn")
 async def health():
     """
     Healthcheck đơn giản.
     """
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+async def index():
+    """
+    Redirect root to Swagger docs for convenience.
+    """
+    return RedirectResponse(url="/docs")

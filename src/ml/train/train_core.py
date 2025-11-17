@@ -1,6 +1,6 @@
 """
-train.py - Module 5 của pipeline TinyML
----------------------------------------
+train_core.py - Module 5 của pipeline TinyML
+--------------------------------------------
 Chức năng:
     - Đọc dữ liệu đã qua bước tạo đặc trưng
     - Chia tập train/validation/test
@@ -8,13 +8,15 @@ Chức năng:
     - Huấn luyện, đánh giá và lưu model_fp32.keras + metrics.json (kèm precision/recall/AUC)
 
 Dùng:
-    python ml/src/train.py
+    python -m src.ml.train.train_core [--input-file ... --model-out ...]
 """
 
+import argparse
 import json
 import os
 import random
-from typing import Dict
+from dataclasses import dataclass
+from typing import Dict, Optional
 
 import joblib
 import numpy as np
@@ -39,6 +41,21 @@ BATCH_SIZE = 32
 TEST_SIZE = 0.15
 VAL_SIZE = 0.15
 RANDOM_STATE = 42
+
+
+@dataclass
+class TrainingConfig:
+    """Tập hợp các tham số để job training có thể tuỳ biến."""
+
+    input_file: str = INPUT_FILE
+    model_out: str = MODEL_OUT
+    metrics_out: str = METRICS_OUT
+    label_encoder_out: str = LABEL_ENCODER_OUT
+    epochs: int = EPOCHS
+    batch_size: int = BATCH_SIZE
+    test_size: float = TEST_SIZE
+    val_size: float = VAL_SIZE
+    random_state: int = RANDOM_STATE
 
 
 # =============================================================
@@ -108,6 +125,7 @@ def save_metrics(
     X_test,
     y_test,
     class_weights: Dict[int, float],
+    metrics_path: str,
 ):
     """Lưu lại metric (loss/acc/precision/recall/auc + confusion matrix) ra file JSON."""
     results = {key: [float(v) for v in values] for key, values in history.history.items()}
@@ -130,28 +148,42 @@ def save_metrics(
     results["confusion_matrix"] = matrix
     results["class_weights"] = class_weights
 
-    os.makedirs(os.path.dirname(METRICS_OUT), exist_ok=True)
-    with open(METRICS_OUT, "w", encoding="utf-8") as fh:
+    os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+    with open(metrics_path, "w", encoding="utf-8") as fh:
         json.dump(results, fh, indent=2)
-    print(f"Đã lưu metrics tại {METRICS_OUT}")
+    print(f"Đã lưu metrics tại {metrics_path}")
 
 
 # =============================================================
 # Hàm chính
 # =============================================================
-def train_model():
+def train_model(config: Optional[TrainingConfig] = None):
     """Huấn luyện model MLP và lưu lại model + metrics."""
-    set_global_seed(RANDOM_STATE)
+    cfg = config or TrainingConfig()
+    if cfg.val_size <= 0 or cfg.test_size <= 0:
+        raise ValueError("val_size/test_size phải > 0")
+    if (cfg.val_size + cfg.test_size) >= 0.9:
+        raise ValueError("val_size + test_size nên < 0.9 để còn dữ liệu train")
 
-    X, y, feature_cols, encoder = load_dataset(INPUT_FILE)
+    set_global_seed(cfg.random_state)
+
+    X, y, feature_cols, encoder = load_dataset(cfg.input_file)
     print(f"Sử dụng {len(feature_cols)} đặc trưng: {feature_cols}")
 
     X_train, X_tmp, y_train, y_tmp = train_test_split(
-        X, y, test_size=(VAL_SIZE + TEST_SIZE), stratify=y, random_state=RANDOM_STATE
+        X,
+        y,
+        test_size=(cfg.val_size + cfg.test_size),
+        stratify=y,
+        random_state=cfg.random_state,
     )
-    rel_test_size = TEST_SIZE / (VAL_SIZE + TEST_SIZE)
+    rel_test_size = cfg.test_size / (cfg.val_size + cfg.test_size)
     X_val, X_test, y_val, y_test = train_test_split(
-        X_tmp, y_tmp, test_size=rel_test_size, stratify=y_tmp, random_state=RANDOM_STATE
+        X_tmp,
+        y_tmp,
+        test_size=rel_test_size,
+        stratify=y_tmp,
+        random_state=cfg.random_state,
     )
 
     print(f"Tỉ lệ chia: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
@@ -168,8 +200,8 @@ def train_model():
         X_train,
         y_train,
         validation_data=(X_val, y_val),
-        epochs=EPOCHS,
-        batch_size=BATCH_SIZE,
+        epochs=cfg.epochs,
+        batch_size=cfg.batch_size,
         verbose=1,
         callbacks=callbacks,
         class_weight=class_weights,
@@ -178,15 +210,55 @@ def train_model():
     test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
     print(f"Độ chính xác tập test: {test_acc:.3f} (loss: {test_loss:.3f})")
 
-    os.makedirs(os.path.dirname(MODEL_OUT), exist_ok=True)
-    model.save(MODEL_OUT)
-    print(f"Đã lưu model tại {MODEL_OUT}")
+    os.makedirs(os.path.dirname(cfg.model_out), exist_ok=True)
+    model.save(cfg.model_out)
+    print(f"Đã lưu model tại {cfg.model_out}")
 
-    joblib.dump({"classes": encoder.classes_, "features": feature_cols}, LABEL_ENCODER_OUT)
-    print(f"Đã lưu mapping label tại {LABEL_ENCODER_OUT}")
+    joblib.dump({"classes": encoder.classes_, "features": feature_cols}, cfg.label_encoder_out)
+    print(f"Đã lưu mapping label tại {cfg.label_encoder_out}")
 
-    save_metrics(history, model, X_test, y_test, class_weights)
+    save_metrics(history, model, X_test, y_test, class_weights, cfg.metrics_out)
+
+    return {
+        "modelPath": cfg.model_out,
+        "metricsPath": cfg.metrics_out,
+        "labelEncoderPath": cfg.label_encoder_out,
+        "trainSamples": len(X_train),
+        "valSamples": len(X_val),
+        "testSamples": len(X_test),
+        "features": feature_cols,
+    }
+
+
+def _parse_cli_args():
+    parser = argparse.ArgumentParser(description="Huấn luyện TinyML model.")
+    parser.add_argument("--input-file", default=INPUT_FILE, help="Đường dẫn CSV đặc trưng")
+    parser.add_argument("--model-out", default=MODEL_OUT, help="Đường dẫn lưu model .keras")
+    parser.add_argument("--metrics-out", default=METRICS_OUT, help="Đường dẫn lưu metrics.json")
+    parser.add_argument(
+        "--label-encoder-out",
+        default=LABEL_ENCODER_OUT,
+        help="Đường dẫn lưu file label_encoder.joblib",
+    )
+    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--test-size", type=float, default=TEST_SIZE)
+    parser.add_argument("--val-size", type=float, default=VAL_SIZE)
+    parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    train_model()
+    cli_args = _parse_cli_args()
+    cfg = TrainingConfig(
+        input_file=cli_args.input_file,
+        model_out=cli_args.model_out,
+        metrics_out=cli_args.metrics_out,
+        label_encoder_out=cli_args.label_encoder_out,
+        epochs=cli_args.epochs,
+        batch_size=cli_args.batch_size,
+        test_size=cli_args.test_size,
+        val_size=cli_args.val_size,
+        random_state=cli_args.random_state,
+    )
+    train_model(cfg)
