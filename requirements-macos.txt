@@ -1,0 +1,3 @@
+-r requirements-base.txt
+
+tensorflow-macos==2.15.0

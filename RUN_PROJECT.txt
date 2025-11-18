@@ -16,15 +16,15 @@ macOS (zsh/bash)
 ----------------
 1. Create a virtualenv: `python3.11 -m venv .venv`.
 2. Activate it: `source .venv/bin/activate`.
-3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements.txt`.
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-macos.txt`.
 4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 9000`.
 5. Open Swagger UI at `http://127.0.0.1:9000/docs` (Redoc at `/redoc`).
 
 Windows (PowerShell)
 --------------------
 1. Create venv: `py -3.11 -m venv .venv`.
-2. Activate: `.\.venv\Scripts\Activate.ps1` (allow the script with `Set-ExecutionPolicy -Scope Process RemoteSigned` if needed).
-3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements.txt`.
+2. Activate: PowerShell → `.\.venv\Scripts\Activate.ps1` (run `Set-ExecutionPolicy -Scope Process RemoteSigned` if it blocks scripts); classic CMD → `.\.venv\Scripts\activate.bat`.
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-windows.txt`.
 4. Run uvicorn via module form (avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 9000`.
 5. Browse to `http://127.0.0.1:9000/docs` for Swagger.
 

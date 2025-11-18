@@ -3,9 +3,25 @@
 Pipeline and gateway to collect pond telemetry, train a TinyML model, and serve it to edge devices.
 
 ## Setup
-- Python 3.11+ recommended.
-- Install dependencies (gateway + ML pipeline): `pip install -r requirements.txt`.
+
+### Shared prerequisites
+- Python 3.11+ (3.12 works too).
 - Optional: copy `.env.example` to `.env` if you need to override gateway paths or ports.
+- The helper script `python install_dependencies.py --file <requirements-file>` works on both OSes.
+
+### macOS (zsh/bash)
+1. Create a virtualenv: `python3.11 -m venv .venv`.
+2. Activate it: `source .venv/bin/activate`.
+3. Upgrade pip and install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-macos.txt`.
+4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 9000`.
+5. Open Swagger UI at `http://127.0.0.1:9000/docs` (Redoc at `/redoc`).
+
+### Windows (PowerShell)
+1. Create a virtualenv: `py -3.11 -m venv .venv`.
+2. Activate it: PowerShell → `.\.venv\Scripts\Activate.ps1` (run `Set-ExecutionPolicy -Scope Process RemoteSigned` if blocked); CMD → `.\.venv\Scripts\activate.bat`.
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-windows.txt`.
+4. Run uvicorn (module form avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 9000`.
+5. Browse to `http://127.0.0.1:9000/docs` for Swagger (root `/` returns `{"detail":"Not Found"}` by design).
 
 ## Training Pipeline (src/ml/train)
 1. `python src/ml/train/ingest.py` – merge raw CSVs into `dataset/interim/raw_merged.csv`.

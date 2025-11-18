@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 import uuid
+import traceback
 
 from src.ml.train.train_core import TrainingConfig, train_model
 
@@ -80,10 +81,24 @@ async def _run_job(record: TrainingJobRecord) -> None:
     cfg = _merge_training_config(record.config)
 
     def _runner():
-        with open(record.log_path, "w", encoding="utf-8") as log_file, redirect_stdout(
-            log_file
-        ), redirect_stderr(log_file):
-            return train_model(cfg)
+        with open(record.log_path, "w", encoding="utf-8") as log_file:
+            log_file.write(
+                f"# Training job {record.job_id}\nStarted: {record.started_at.isoformat()}Z\n"
+            )
+            log_file.write(f"Config: {cfg.__dict__}\n\n")
+            log_file.flush()
+            try:
+                with redirect_stdout(log_file), redirect_stderr(log_file):
+                    result = train_model(cfg, log_path=str(record.log_path))
+            except Exception:  # pylint: disable=broad-except
+                log_file.write("\n[ERROR] Training crashed:\n")
+                traceback.print_exc(file=log_file)
+                log_file.flush()
+                raise
+            else:
+                log_file.write("\n[INFO] Training finished successfully.\n")
+                log_file.flush()
+                return result
 
     try:
         record.result = await asyncio.to_thread(_runner)

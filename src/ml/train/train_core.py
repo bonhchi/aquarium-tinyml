@@ -12,11 +12,16 @@ Dùng:
 """
 
 import argparse
+import csv
 import json
 import os
 import random
-from dataclasses import dataclass
-from typing import Dict, Optional
+import shutil
+import uuid
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import joblib
 import numpy as np
@@ -25,8 +30,13 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.class_weight import compute_class_weight
+
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 import tensorflow as tf
 from tensorflow import keras
+
+tf.get_logger().setLevel("ERROR")
 
 # =============================================================
 # Cấu hình cơ bản
@@ -35,6 +45,7 @@ INPUT_FILE = "dataset/interim/aquarium_tinyml_features.csv"
 MODEL_OUT = "ml/artifacts/model_fp32.keras"
 METRICS_OUT = "ml/artifacts/metrics.json"
 LABEL_ENCODER_OUT = "ml/artifacts/label_encoder.joblib"
+RUN_ARCHIVE_ROOT = Path("ml/artifacts/runs")
 
 EPOCHS = 50
 BATCH_SIZE = 32
@@ -88,22 +99,22 @@ def load_dataset(file_path: str = INPUT_FILE):
     return X, y, feature_cols, encoder
 
 
-def build_tiny_mlp(input_dim: int, n_classes: int = 2):
-    """Khởi tạo MLP nhỏ gọn cho TinyML."""
+def build_tiny_mlp(input_dim: int):
+    """Khởi tạo MLP nhỏ gọn cho TinyML (dạng binary sigmoid)."""
     model = keras.Sequential(
         [
             keras.layers.Input(shape=(input_dim,), name="input"),
             keras.layers.Dense(32, activation="relu", name="dense_1"),
             keras.layers.Dropout(0.2),
             keras.layers.Dense(16, activation="relu", name="dense_2"),
-            keras.layers.Dense(n_classes, activation="softmax", name="output"),
+            keras.layers.Dense(1, activation="sigmoid", name="output"),
         ]
     )
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=1e-3),
-        loss="sparse_categorical_crossentropy",
+        loss="binary_crossentropy",
         metrics=[
-            keras.metrics.SparseCategoricalAccuracy(name="accuracy"),
+            keras.metrics.BinaryAccuracy(name="accuracy"),
             keras.metrics.Precision(name="precision"),
             keras.metrics.Recall(name="recall"),
             keras.metrics.AUC(name="auc"),
@@ -129,12 +140,14 @@ def save_metrics(
 ):
     """Lưu lại metric (loss/acc/precision/recall/auc + confusion matrix) ra file JSON."""
     results = {key: [float(v) for v in values] for key, values in history.history.items()}
-    test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
-    results["test_accuracy"] = float(test_acc)
-    results["test_loss"] = float(test_loss)
+    test_metrics = model.evaluate(X_test, y_test, verbose=0, return_dict=True)
+    results["test_accuracy"] = float(
+        test_metrics.get("accuracy", test_metrics.get("binary_accuracy", 0.0))
+    )
+    results["test_loss"] = float(test_metrics.get("loss", 0.0))
 
-    proba = model.predict(X_test, verbose=0)
-    preds = np.argmax(proba, axis=1)
+    proba = model.predict(X_test, verbose=0).ravel()
+    preds = (proba >= 0.5).astype(int)
     report = classification_report(
         y_test,
         preds,
@@ -152,12 +165,66 @@ def save_metrics(
     with open(metrics_path, "w", encoding="utf-8") as fh:
         json.dump(results, fh, indent=2)
     print(f"Đã lưu metrics tại {metrics_path}")
+    return results
+
+
+def _write_history_csv(history: keras.callbacks.History, csv_path: Path) -> None:
+    """Xuất lịch sử huấn luyện dạng CSV giống ví dụ tham khảo."""
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = ["epoch"] + list(history.history.keys())
+    rows = []
+    num_epochs = len(history.epoch)
+    for idx in range(num_epochs):
+        row = [idx + 1]
+        for key in history.history.keys():
+            values = history.history[key]
+            row.append(float(values[idx]) if idx < len(values) else "")
+        rows.append(row)
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(fieldnames)
+        writer.writerows(rows)
+
+
+def archive_training_run(
+    cfg: TrainingConfig,
+    history: keras.callbacks.History,
+    summary: Dict[str, Any],
+    log_path: Optional[str] = None,
+) -> Path:
+    """Lưu trữ kết quả mỗi lần chạy vào thư mục timestamp."""
+    RUN_ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    run_dir = RUN_ARCHIVE_ROOT / f"{stamp}-{uuid.uuid4().hex[:6]}"
+    run_dir.mkdir(exist_ok=False)
+
+    history_payload = {key: [float(v) for v in values] for key, values in history.history.items()}
+
+    with open(run_dir / "config.json", "w", encoding="utf-8") as fh:
+        json.dump(asdict(cfg), fh, indent=2)
+    with open(run_dir / "history.json", "w", encoding="utf-8") as fh:
+        json.dump(history_payload, fh, indent=2)
+    with open(run_dir / "summary.json", "w", encoding="utf-8") as fh:
+        json.dump(summary, fh, indent=2)
+    _write_history_csv(history, run_dir / "history_epoch.csv")
+
+    if log_path and os.path.exists(log_path):
+        shutil.copy2(log_path, run_dir / "training.log")
+
+    for artifact_path in (cfg.model_out, cfg.metrics_out, cfg.label_encoder_out):
+        if artifact_path and os.path.exists(artifact_path):
+            dest = run_dir / Path(artifact_path).name
+            shutil.copy2(artifact_path, dest)
+
+    print(f"Đã lưu snapshot run tại {run_dir}")
+    return run_dir
 
 
 # =============================================================
 # Hàm chính
 # =============================================================
-def train_model(config: Optional[TrainingConfig] = None):
+def train_model(config: Optional[TrainingConfig] = None, log_path: Optional[str] = None):
     """Huấn luyện model MLP và lưu lại model + metrics."""
     cfg = config or TrainingConfig()
     if cfg.val_size <= 0 or cfg.test_size <= 0:
@@ -207,7 +274,9 @@ def train_model(config: Optional[TrainingConfig] = None):
         class_weight=class_weights,
     )
 
-    test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
+    eval_metrics = model.evaluate(X_test, y_test, verbose=0, return_dict=True)
+    test_loss = float(eval_metrics.get("loss", 0.0))
+    test_acc = float(eval_metrics.get("accuracy", eval_metrics.get("binary_accuracy", 0.0)))
     print(f"Độ chính xác tập test: {test_acc:.3f} (loss: {test_loss:.3f})")
 
     os.makedirs(os.path.dirname(cfg.model_out), exist_ok=True)
@@ -217,9 +286,11 @@ def train_model(config: Optional[TrainingConfig] = None):
     joblib.dump({"classes": encoder.classes_, "features": feature_cols}, cfg.label_encoder_out)
     print(f"Đã lưu mapping label tại {cfg.label_encoder_out}")
 
-    save_metrics(history, model, X_test, y_test, class_weights, cfg.metrics_out)
+    metrics_payload = save_metrics(
+        history, model, X_test, y_test, class_weights, cfg.metrics_out
+    )
 
-    return {
+    summary = {
         "modelPath": cfg.model_out,
         "metricsPath": cfg.metrics_out,
         "labelEncoderPath": cfg.label_encoder_out,
@@ -228,6 +299,10 @@ def train_model(config: Optional[TrainingConfig] = None):
         "testSamples": len(X_test),
         "features": feature_cols,
     }
+    summary_with_metrics = {**summary, "metrics": metrics_payload}
+    run_dir = archive_training_run(cfg, history, summary_with_metrics, log_path=log_path)
+    summary["runDir"] = str(run_dir)
+    return summary
 
 
 def _parse_cli_args():
