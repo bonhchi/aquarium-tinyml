@@ -1,0 +1,19 @@
+services:
+  he_thong_nhung_api:
+    build: .
+    image: he_thong_nhung_api:prod
+    container_name: he_thong_nhung_api
+    ports:
+      - "5012:5000"
+    volumes:
+      - .:/app
+    networks:
+      - flask_network
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+networks:
+  flask_network:
+    name: flask_network
+    driver: bridge

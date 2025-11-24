@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard Hồ Cá{% endblock %}
+
+{% block content %}
+<div class="container-fluid p-0">
+
+    <h1 class="h3 mb-3"><strong>Dashboard</strong> Giám Sát Hồ Cá</h1>
+
+    <div class="row">
+        <div class="col-12 col-sm-6 col-xxl-3 d-flex">
+            <div class="card flex-fill">
+                <div class="card-body py-4">
+                    <div class="d-flex align-items-start">
+                        <div class="flex-grow-1">
+                            <h3 class="mb-2"><span id="temp-val">--</span> °C</h3>
+                            <p class="mb-2">Nhiệt độ nước</p>
+                            <div class="mb-0">
+                                <span class="badge bg-success me-2"> Ổn định </span>
+                            </div>
+                        </div>
+                        <div class="d-inline-block ms-3">
+                            <div class="stat">
+                                <i class="align-middle text-primary" data-feather="thermometer"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-sm-6 col-xxl-3 d-flex">
+            <div class="card flex-fill">
+                <div class="card-body py-4">
+                    <div class="d-flex align-items-start">
+                        <div class="flex-grow-1">
+                            <h3 class="mb-2" id="ph-val">--</h3>
+                            <p class="mb-2">Độ pH</p>
+                            <div class="mb-0">
+                                <span class="badge bg-success me-2"> Tốt </span>
+                            </div>
+                        </div>
+                        <div class="d-inline-block ms-3">
+                            <div class="stat">
+                                <i class="align-middle text-success" data-feather="activity"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-sm-6 col-xxl-3 d-flex">
+            <div class="card flex-fill">
+                <div class="card-body py-4">
+                    <div class="d-flex align-items-start">
+                        <div class="flex-grow-1">
+                            <div class="mb-2">
+                                <span id="pump-status" class="badge bg-secondary">OFF</span>
+                            </div>
+                            <p class="mb-2">Máy Bơm Oxy</p>
+                            <div class="mt-3">
+                                <button class="btn btn-sm btn-success" onclick="controlDevice('pump', 'on')">Bật</button>
+                                <button class="btn btn-sm btn-danger" onclick="controlDevice('pump', 'off')">Tắt</button>
+                            </div>
+                        </div>
+                        <div class="d-inline-block ms-3">
+                            <div class="stat">
+                                <i class="align-middle text-info" data-feather="wind"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-sm-6 col-xxl-3 d-flex">
+            <div class="card flex-fill">
+                <div class="card-body py-4">
+                    <div class="d-flex align-items-start">
+                        <div class="flex-grow-1">
+                            <div class="mb-2">
+                                <span id="light-status" class="badge bg-secondary">OFF</span>
+                            </div>
+                            <p class="mb-2">Đèn Chiếu Sáng</p>
+                            <div class="mt-3">
+                                <button class="btn btn-sm btn-warning" onclick="controlDevice('light', 'on')">Bật</button>
+                                <button class="btn btn-sm btn-dark" onclick="controlDevice('light', 'off')">Tắt</button>
+                            </div>
+                        </div>
+                        <div class="d-inline-block ms-3">
+                            <div class="stat">
+                                <i class="align-middle text-warning" data-feather="sun"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-12 col-lg-8 d-flex">
+            <div class="card flex-fill w-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Biểu đồ Biến động (20 điểm gần nhất)</h5>
+                </div>
+                <div class="card-body p-3 d-flex">
+                    <div class="align-self-center w-100">
+                        <div class="chart chart-md">
+                            <canvas id="chartjs-dashboard-line"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-lg-4 d-flex">
+            <div class="card flex-fill w-100">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Trạng thái Bơm</h5>
+                </div>
+                <div class="card-body d-flex">
+                    <div class="align-self-center w-100">
+                        <div class="py-3">
+                            <div class="chart chart-xs">
+                                <canvas id="chartjs-dashboard-pie"></canvas>
+                            </div>
+                        </div>
+                        <table class="table mb-0">
+                            <tbody>
+                                <tr>
+                                    <td>Đang Bật (ON)</td>
+                                    <td class="text-end" id="txt-pump-on">0</td>
+                                </tr>
+                                <tr>
+                                    <td>Đang Tắt (OFF)</td>
+                                    <td class="text-end" id="txt-pump-off">0</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-12 col-lg-12 d-flex">
+            <div class="card flex-fill">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">So sánh Nhiệt độ & pH (10 mẫu gần nhất)</h5>
+                </div>
+                <div class="card-body d-flex">
+                    <div class="align-self-center w-100">
+                        <div class="chart chart-sm">
+                             <canvas id="chartjs-dashboard-bar"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+
+{% block scripts %}
+<script>
+    // --- 1. HÀM CẬP NHẬT SỐ LIỆU THẺ (AJAX) ---
+    function updateSensors() {
+        fetch('/api/get_latest')
+            .then(response => response.json())
+            .then(data => {
+                // Cập nhật text
+                document.getElementById('temp-val').innerText = data.temp.toFixed(1);
+                document.getElementById('ph-val').innerText = data.ph.toFixed(1);
+                
+                // Cập nhật trạng thái Bơm
+                const pumpBadge = document.getElementById('pump-status');
+                if(data.pump) { 
+                    pumpBadge.className = 'badge bg-success'; 
+                    pumpBadge.innerText = 'ON'; 
+                } else { 
+                    pumpBadge.className = 'badge bg-secondary'; 
+                    pumpBadge.innerText = 'OFF'; 
+                }
+
+                // Cập nhật trạng thái Đèn
+                const lightBadge = document.getElementById('light-status');
+                if(data.light) { 
+                    lightBadge.className = 'badge bg-warning text-dark'; 
+                    lightBadge.innerText = 'ON'; 
+                } else { 
+                    lightBadge.className = 'badge bg-secondary'; 
+                    lightBadge.innerText = 'OFF'; 
+                }
+            })
+            .catch(err => console.error('Lỗi updateSensors:', err));
+    }
+
+    // --- 2. HÀM GỬI LỆNH ĐIỀU KHIỂN ---
+    function controlDevice(device, action) {
+        fetch('/api/control', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ device: device, action: action }),
+        })
+        .then(res => res.json())
+        .then(data => { 
+            console.log("Đã gửi lệnh:", data);
+            updateSensors(); // Cập nhật ngay lập tức để thấy thay đổi
+        });
+    }
+
+    // --- 3. HÀM VẼ 3 BIỂU ĐỒ ---
+    document.addEventListener("DOMContentLoaded", function() {
+        async function loadChart() {
+            try {
+                const response = await fetch('/api/get_chart_data');
+                const data = await response.json();
+
+                // A. Biểu đồ LINE (Nhiệt độ & pH)
+                var ctxLine = document.getElementById("chartjs-dashboard-line").getContext("2d");
+                var gradient = ctxLine.createLinearGradient(0, 0, 0, 225);
+                gradient.addColorStop(0, "rgba(215, 227, 244, 1)");
+                gradient.addColorStop(1, "rgba(215, 227, 244, 0)");
+
+                new Chart(ctxLine, {
+                    type: "line",
+                    data: {
+                        labels: data.labels,
+                        datasets: [{
+                            label: "Nhiệt độ (°C)",
+                            fill: true,
+                            backgroundColor: gradient,
+                            borderColor: window.theme.primary,
+                            data: data.temperatures
+                        }, {
+                            label: "Độ pH",
+                            fill: false,
+                            borderColor: window.theme.success,
+                            borderDash: [5, 5],
+                            data: data.phs
+                        }]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        legend: { display: true },
+                        tooltips: { intersect: false },
+                        hover: { intersect: true },
+                        plugins: { filler: { propagate: false } },
+                        scales: {
+                            xAxes: [{ reverse: true, gridLines: { color: "rgba(0,0,0,0.0)" } }],
+                            yAxes: [{ ticks: { stepSize: 1 }, display: true, borderDash: [3, 3], gridLines: { color: "rgba(0,0,0,0.0)" } }]
+                        }
+                    }
+                });
+
+                // B. Biểu đồ PIE (Trạng thái Bơm)
+                // Cập nhật text bảng bên cạnh
+                if(data.pump_stats) {
+                    document.getElementById('txt-pump-on').innerText = data.pump_stats[0];
+                    document.getElementById('txt-pump-off').innerText = data.pump_stats[1];
+
+                    new Chart(document.getElementById("chartjs-dashboard-pie"), {
+                        type: "pie",
+                        data: {
+                            labels: ["Bật (ON)", "Tắt (OFF)"],
+                            datasets: [{
+                                data: data.pump_stats,
+                                backgroundColor: [ window.theme.success, window.theme.secondary ],
+                                borderWidth: 5
+                            }]
+                        },
+                        options: {
+                            responsive: !window.MSInputMethodContext,
+                            maintainAspectRatio: false,
+                            legend: { display: false },
+                            cutoutPercentage: 70
+                        }
+                    });
+                }
+
+                // C. Biểu đồ BAR (Cột)
+                const barLabels = data.labels.slice(0, 10); 
+                const barTemps = data.temperatures.slice(0, 10);
+                const barPhs = data.phs.slice(0, 10);
+
+                new Chart(document.getElementById("chartjs-dashboard-bar"), {
+                    type: "bar",
+                    data: {
+                        labels: barLabels,
+                        datasets: [{
+                            label: "Nhiệt độ",
+                            backgroundColor: window.theme.primary,
+                            hoverBackgroundColor: window.theme.primary,
+                            data: barTemps,
+                            barPercentage: .75,
+                            categoryPercentage: .5
+                        }, {
+                            label: "Độ pH",
+                            backgroundColor: window.theme.warning,
+                            hoverBackgroundColor: window.theme.warning,
+                            data: barPhs,
+                            barPercentage: .75,
+                            categoryPercentage: .5
+                        }]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        legend: { display: true },
+                        scales: {
+                            yAxes: [{ gridLines: { display: false }, stacked: false }],
+                            xAxes: [{ stacked: false, gridLines: { color: "transparent" } }]
+                        }
+                    }
+                });
+
+            } catch (error) { console.error('Lỗi loadChart:', error); }
+        }
+
+        // --- CHẠY ---
+        loadChart();          // Vẽ biểu đồ 1 lần khi tải trang
+        updateSensors();      // Cập nhật số liệu ngay
+        setInterval(updateSensors, 5000); // Lặp lại mỗi 5 giây
+    });
+</script>
+{% endblock %}
