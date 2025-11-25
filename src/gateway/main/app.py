@@ -1,4 +1,7 @@
+import os
+
 from flask import Flask, request, jsonify
+
 from database import SessionLocal, Turbidity, TemperatureHumidity, Water, get_vietnam_time
 
 app = Flask(__name__)
@@ -110,5 +113,6 @@ def home():
     return "Server is running!"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.getenv("GATEWAY_MAIN_PORT", "5001"))
+    app.run(host="0.0.0.0", port=port, debug=False)
     

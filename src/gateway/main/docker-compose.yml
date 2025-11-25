@@ -1,6 +1,8 @@
 services:
   he_thong_nhung_api:
-    build: .
+    build:
+      context: ../../..
+      dockerfile: src/gateway/flask_api/Dockerfile
     image: he_thong_nhung_api:prod
     container_name: he_thong_nhung_api
     ports:

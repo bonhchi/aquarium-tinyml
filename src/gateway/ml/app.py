@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 
@@ -207,3 +209,10 @@ async def index():
     Redirect root to Swagger docs for convenience.
     """
     return RedirectResponse(url="/docs")
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("ML_API_PORT", "9000"))
+    import uvicorn
+
+    uvicorn.run("src.gateway.ml.app:app", host="0.0.0.0", port=port, reload=True)

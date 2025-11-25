@@ -1,8 +1,10 @@
-from flask import Flask, render_template, redirect, url_for, request, jsonify
-from models import db, User, SystemData
-from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 import json
+import os
 from datetime import datetime
+
+from flask import Flask, render_template, redirect, url_for, request, jsonify
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user
+from models import db, User, SystemData
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secretkey_cua_ban' # Đổi thành chuỗi ngẫu nhiên
@@ -153,4 +155,6 @@ def get_chart_data():
 # ... (Phần code điều khiển /api/control) ...
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    # Default dashboard port avoids clashing with the ingestion/ML APIs.
+    port = int(os.getenv("DASHBOARD_PORT", "3000"))
+    app.run(debug=True, host='0.0.0.0', port=port)

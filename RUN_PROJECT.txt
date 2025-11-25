@@ -11,12 +11,13 @@ Shared prep
 2. Clone the repo and `cd Aquarium/aquarium-tinyml`.
 3. Optional: copy `.env.example` to `.env` if you need to override default paths/ports.
 4. Thay vì gõ lệnh pip dài, có thể chạy `python install_dependencies.py` (thêm `--gateway` để chỉ cài phần API).
+5. `requirements.txt` hoạt động chung cho macOS/Windows (pip tự chọn TensorFlow), nhưng bạn vẫn có thể dùng `requirements-macos.txt` hoặc `requirements-windows.txt` nếu muốn lệnh riêng theo OS.
 
 macOS (zsh/bash)
 ----------------
 1. Create a virtualenv: `python3.11 -m venv .venv`.
 2. Activate it: `source .venv/bin/activate`.
-3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-macos.txt`.
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-macos.txt` (hoặc `requirements.txt` nếu muốn).
 4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 9000`.
 5. Open Swagger UI at `http://127.0.0.1:9000/docs` (Redoc at `/redoc`).
 
@@ -24,7 +25,7 @@ Windows (PowerShell)
 --------------------
 1. Create venv: `py -3.11 -m venv .venv`.
 2. Activate: PowerShell → `.\.venv\Scripts\Activate.ps1` (run `Set-ExecutionPolicy -Scope Process RemoteSigned` if it blocks scripts); classic CMD → `.\.venv\Scripts\activate.bat`.
-3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-windows.txt`.
+3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-windows.txt` (hoặc giữ `requirements.txt` nếu muốn dùng chung).
 4. Run uvicorn via module form (avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 9000`.
 5. Browse to `http://127.0.0.1:9000/docs` for Swagger.
 
@@ -38,3 +39,4 @@ Notes (Tiếng Việt)
 ------------------
 - Script `python install_dependencies.py` giúp cài nhanh toàn bộ package; tham số `--gateway` chỉ cài phần API gateway.
 - Swagger hiển thị tại `/docs`; trang `/` sẽ redirect về đây nên thông báo "Not Found" ở root là bình thường.
+- Dịch vụ Flask ghi nhận dữ liệu cảm biến đã được chuyển vào `src/gateway/flask_api`; cài chung requirements rồi chạy `python src/gateway/flask_api/app.py` hoặc `cd src/gateway/flask_api && docker-compose up --build`.
