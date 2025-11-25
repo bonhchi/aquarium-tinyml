@@ -17,11 +17,12 @@ import json
 import os
 import random
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import joblib
 import numpy as np
@@ -191,7 +192,30 @@ def _write_history_csv(history: keras.callbacks.History, csv_path: Path) -> None
         writer.writerows(rows)
 
 
-def _write_epoch_history_json(history: keras.callbacks.History, json_path: Path) -> None:
+class EpochTimingCallback(keras.callbacks.Callback):
+    """Theo dõi thời gian huấn luyện mỗi epoch để lưu vào JSON."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._epoch_start: Optional[float] = None
+        self.durations: List[float] = []
+
+    def on_epoch_begin(self, epoch, logs=None):  # type: ignore[override]
+        del logs
+        self._epoch_start = time.perf_counter()
+
+    def on_epoch_end(self, epoch, logs=None):  # type: ignore[override]
+        del logs
+        if self._epoch_start is not None:
+            self.durations.append(time.perf_counter() - self._epoch_start)
+            self._epoch_start = None
+
+
+def _write_epoch_history_json(
+    history: keras.callbacks.History,
+    json_path: Path,
+    epoch_durations: Optional[List[float]] = None,
+) -> None:
     """Lưu thông số từng epoch ra file JSON để dễ trực quan hóa."""
     if not json_path:
         return
@@ -204,6 +228,8 @@ def _write_epoch_history_json(history: keras.callbacks.History, json_path: Path)
         for key, values in history_dict.items():
             if idx < len(values):
                 entry[key] = values[idx]
+        if epoch_durations and idx < len(epoch_durations):
+            entry["epoch_duration"] = float(epoch_durations[idx])
         payload["epochs"].append(entry)
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
@@ -289,6 +315,7 @@ def train_model(
     print(f"Class weights (train): {class_weights}")
 
     model = build_tiny_mlp(X_train.shape[1])
+    timing_callback = EpochTimingCallback()
     history = model.fit(
         X_train,
         y_train,
@@ -296,10 +323,15 @@ def train_model(
         epochs=cfg.epochs,
         batch_size=cfg.batch_size,
         verbose=2,
+        callbacks=[timing_callback],
         class_weight=class_weights,
     )
     if epoch_history_path:
-        _write_epoch_history_json(history, Path(epoch_history_path))
+        _write_epoch_history_json(
+            history,
+            Path(epoch_history_path),
+            epoch_durations=timing_callback.durations,
+        )
 
     eval_metrics = model.evaluate(X_test, y_test, verbose=0, return_dict=True)
     test_loss = float(eval_metrics.get("loss", 0.0))
