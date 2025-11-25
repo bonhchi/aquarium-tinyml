@@ -4,24 +4,46 @@ from __future__ import annotations
 import csv
 import io
 import os
+import sys
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 
-from .model_store import load_model_meta, save_model_meta
-from .schemas import (
-    ModelPublishRequest,
-    TelemetryPayload,
-    TelemetryQuery,
-    TrainingDataQuery,
-    TrainingJobConfigPayload,
-    TrainingJobInfo,
-)
-from .telemetry_store import append_telemetry, query_telemetry
-from .training_data_store import training_data_store
-from .training_jobs import get_job as get_training_job
-from .training_jobs import list_jobs as list_training_jobs
-from .training_jobs import start_training_job
+if __package__:
+    from .model_store import load_model_meta, save_model_meta
+    from .schemas import (
+        ModelPublishRequest,
+        TelemetryPayload,
+        TelemetryQuery,
+        TrainingDataQuery,
+        TrainingJobConfigPayload,
+        TrainingJobInfo,
+    )
+    from .telemetry_store import append_telemetry, query_telemetry
+    from .training_data_store import training_data_store
+    from .training_jobs import get_job as get_training_job
+    from .training_jobs import list_jobs as list_training_jobs
+    from .training_jobs import start_training_job
+else:
+    # Allow running via `python src/gateway/ml/app.py` by appending repo root.
+    REPO_ROOT = Path(__file__).resolve().parents[3]
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.append(str(REPO_ROOT))
+    from src.gateway.ml.model_store import load_model_meta, save_model_meta
+    from src.gateway.ml.schemas import (
+        ModelPublishRequest,
+        TelemetryPayload,
+        TelemetryQuery,
+        TrainingDataQuery,
+        TrainingJobConfigPayload,
+        TrainingJobInfo,
+    )
+    from src.gateway.ml.telemetry_store import append_telemetry, query_telemetry
+    from src.gateway.ml.training_data_store import training_data_store
+    from src.gateway.ml.training_jobs import get_job as get_training_job
+    from src.gateway.ml.training_jobs import list_jobs as list_training_jobs
+    from src.gateway.ml.training_jobs import start_training_job
 
 tags_metadata = [
     {
@@ -212,7 +234,7 @@ async def index():
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("ML_API_PORT", "9000"))
+    port = int(os.getenv("ML_API_PORT", "5000"))
     import uvicorn
 
     uvicorn.run("src.gateway.ml.app:app", host="0.0.0.0", port=port, reload=True)

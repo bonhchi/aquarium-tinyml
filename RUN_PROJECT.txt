@@ -1,42 +1,68 @@
-Aquarium TinyML Gateway – Run Guide
-===================================
+Aquarium TinyML Gateway – Hướng dẫn chạy
+========================================
 
-Overview
---------
-These steps start the FastAPI gateway (with Swagger UI) on both macOS and Windows. The API root (`/`) is not defined, so visiting it returns `{\"detail\":\"Not Found\"}`; open `/docs` instead to view Swagger.
+Tổng quan
+---------
+Tài liệu này mô tả cách chuẩn bị môi trường và khởi động đủ ba API: Dashboard (Flask), Gateway thu thập (Flask) và Gateway ML (FastAPI có Swagger UI). Root `/` của gateway ML không có handler nên truy cập trực tiếp sẽ trả `{"detail":"Not Found"}` – hãy dùng `/docs`.
 
-Shared prep
------------
-1. Install Python 3.11+ (3.12 works fine).
-2. Clone the repo and `cd Aquarium/aquarium-tinyml`.
-3. Optional: copy `.env.example` to `.env` if you need to override default paths/ports.
-4. Thay vì gõ lệnh pip dài, có thể chạy `python install_dependencies.py` (thêm `--gateway` để chỉ cài phần API).
-5. `requirements.txt` hoạt động chung cho macOS/Windows (pip tự chọn TensorFlow), nhưng bạn vẫn có thể dùng `requirements-macos.txt` hoặc `requirements-windows.txt` nếu muốn lệnh riêng theo OS.
+Chuẩn bị chung
+--------------
+1. Cài Python 3.11+ (3.12 chạy tốt).
+2. Clone repo rồi `cd aquarium-tinyml`.
+3. Tuỳ chọn: sao chép `.env.example` → `.env` nếu cần đổi port/đường dẫn.
+4. Để khỏi nhớ lệnh pip dài, có thể chạy `python install_dependencies.py` (thêm `--gateway` nếu chỉ cài phần API).
+5. `requirements.txt` dùng environment marker nên hoạt động chung cho macOS/Windows; nếu thích tách riêng thì vẫn có `requirements-macos.txt` và `requirements-windows.txt`.
 
 macOS (zsh/bash)
 ----------------
-1. Create a virtualenv: `python3.11 -m venv .venv`.
-2. Activate it: `source .venv/bin/activate`.
-3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-macos.txt` (hoặc `requirements.txt` nếu muốn).
-4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 9000`.
-5. Open Swagger UI at `http://127.0.0.1:9000/docs` (Redoc at `/redoc`).
+1. Tạo virtualenv: `python3.11 -m venv .venv`.
+2. Kích hoạt: `source .venv/bin/activate`.
+3. Nâng cấp pip + cài phụ thuộc: `python -m pip install --upgrade pip` rồi `pip install -r requirements-macos.txt` (hoặc `requirements.txt`).
 
 Windows (PowerShell)
 --------------------
-1. Create venv: `py -3.11 -m venv .venv`.
-2. Activate: PowerShell → `.\.venv\Scripts\Activate.ps1` (run `Set-ExecutionPolicy -Scope Process RemoteSigned` if it blocks scripts); classic CMD → `.\.venv\Scripts\activate.bat`.
-3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-windows.txt` (hoặc giữ `requirements.txt` nếu muốn dùng chung).
-4. Run uvicorn via module form (avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 9000`.
-5. Browse to `http://127.0.0.1:9000/docs` for Swagger.
+1. Tạo virtualenv: `py -3.11 -m venv .venv`.
+2. Kích hoạt: PowerShell → `.\.venv\Scripts\Activate.ps1` (nếu bị chặn hãy chạy `Set-ExecutionPolicy -Scope Process RemoteSigned`); CMD → `.\.venv\Scripts\activate.bat`.
+3. Nâng cấp pip + cài phụ thuộc: `python -m pip install --upgrade pip` rồi `pip install -r requirements-windows.txt` (hoặc giữ `requirements.txt` dùng chung).
+
+Khởi động 3 dịch vụ API
+-----------------------
+Đảm bảo mỗi tiến trình chạy ở tab terminal riêng để có log độc lập. Nếu muốn gom cả ba vào một câu lệnh (chạy song song, tự dừng khi nhấn Ctrl+C) thì dùng script `python tools/run_stack.py` (có thể truyền thêm `--dashboard-port`, `--gateway-port`, `--ml-port` nếu muốn đổi port). Lúc đó bạn vẫn thấy log của từng service lẫn trong một terminal.
+
+1. **Dashboard (Flask)**
+   - Port mặc định: `3000` (có thể đổi qua biến `DASHBOARD_PORT`).
+   - Lệnh: `python dashboard/app.py`.
+   - Mở giao diện tại `http://127.0.0.1:<port>/`.
+
+2. **Gateway thu thập (Flask – src/gateway/main)**
+   - Port mặc định: `5001` (biến `GATEWAY_MAIN_PORT`).
+   - Lệnh: `python src/gateway/main/app.py`.
+   - Các endpoint `/api/...` nhận dữ liệu turbidity, temperature/humidity, water và trả JSON.
+
+3. **Gateway ML (FastAPI – src/gateway/ml)**
+   - Port mặc định: `5000` (biến `ML_API_PORT`).
+   - Lệnh: `python src/gateway/ml/app.py` (chạy uvicorn với hot reload).
+   - Swagger UI tại `http://127.0.0.1:<port>/docs`, Redoc tại `/redoc`.
+
+Tips:
+- Nếu muốn docker hoá gateway thu thập, dùng `cd src/gateway/main && docker-compose up --build`.
+- File `install_dependencies.py` vẫn hữu ích khi muốn cài nhanh `requirements-base.txt` (tùy chọn `--gateway`).
+- Script `python tools/run_stack.py` giúp khởi động cả ba service cùng lúc; nhấn Ctrl+C để dừng toàn bộ.
+
+Chạy riêng training pipeline (CMD/Terminal)
+------------------------------------------
+- Đảm bảo dataset đã được tạo (`dataset/interim/...`). Nếu thiếu có thể chạy chuỗi script trong `src/ml/train` (ingest → weak_label → preprocess → features).
+- Khi chỉ cần huấn luyện lại model: `python src/ml/train/train_core.py` (đang đọc config mặc định trong file).
+- Các bước hậu xử lý (quantize, export header) có thể chạy thủ công qua `python src/ml/train/quantize.py` và `python src/ml/train/export_header.py`.
 
 Troubleshooting
 ---------------
-- `{\"detail\":\"Not Found\"}` → you hit `/`; go to `/docs` or `/health`.
-- Missing `uvicorn` → ensure virtualenv activated and dependencies installed.
-- TensorFlow install errors on Python 3.9 → recreate venv with Python 3.11+.
+- `{"detail":"Not Found"}`: bạn mở root `/` của FastAPI; hãy dùng `/docs` hoặc `/health`.
+- Thiếu package (vd. `uvicorn`, `Flask`): kiểm tra virtualenv đã kích hoạt và cài đúng `requirements-*.txt`.
+- Lỗi cổng bận: đổi port bằng biến môi trường tương ứng hoặc truyền `--port` cho uvicorn.
+- TensorFlow lỗi khi dùng Python <3.11: tạo lại virtualenv bằng Python 3.11+.
 
-Notes (Tiếng Việt)
-------------------
-- Script `python install_dependencies.py` giúp cài nhanh toàn bộ package; tham số `--gateway` chỉ cài phần API gateway.
-- Swagger hiển thị tại `/docs`; trang `/` sẽ redirect về đây nên thông báo "Not Found" ở root là bình thường.
-- Dịch vụ Flask ghi nhận dữ liệu cảm biến đã được chuyển vào `src/gateway/flask_api`; cài chung requirements rồi chạy `python src/gateway/flask_api/app.py` hoặc `cd src/gateway/flask_api && docker-compose up --build`.
+Ghi chú bổ sung
+---------------
+- Các script training trong `src/ml/train` cần dataset ở `dataset/interim`. Nếu thiếu, hãy chạy pipeline ingest → weak_label → preprocess → features trước.
+- Dòng cuối của mỗi app (Flask/FastAPI) đọc biến môi trường để không trùng port, nên khi deploy nhớ cấu hình `.env` hoặc systemd service tương ứng.

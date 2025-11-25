@@ -2,5 +2,5 @@
 
 # TensorFlow for macOS (Apple Silicon/Intel)
 tensorflow-macos==2.15.0; sys_platform == "darwin"
-# TensorFlow wheels for Windows/Linux (cp311)
-tensorflow==2.15.0; sys_platform != "darwin"
+# TensorFlow wheels for Windows/Linux (Python 3.12+)
+tensorflow==2.20.0; sys_platform != "darwin"

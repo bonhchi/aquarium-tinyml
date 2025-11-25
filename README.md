@@ -14,15 +14,15 @@ Pipeline and gateway to collect pond telemetry, train a TinyML model, and serve 
 1. Create a virtualenv: `python3.11 -m venv .venv`.
 2. Activate it: `source .venv/bin/activate`.
 3. Upgrade pip and install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-macos.txt` (or `requirements.txt` if you want one file for every OS).
-4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 9000`.
-5. Open Swagger UI at `http://127.0.0.1:9000/docs` (Redoc at `/redoc`).
+4. Run the gateway: `uvicorn src.gateway.app:app --reload --port 5000`.
+5. Open Swagger UI at `http://127.0.0.1:5000/docs` (Redoc at `/redoc`).
 
 ### Windows (PowerShell)
 1. Create a virtualenv: `py -3.11 -m venv .venv`.
 2. Activate it: PowerShell → `.\.venv\Scripts\Activate.ps1` (run `Set-ExecutionPolicy -Scope Process RemoteSigned` if blocked); CMD → `.\.venv\Scripts\activate.bat`.
 3. Upgrade pip + install deps: `python -m pip install --upgrade pip` then `pip install -r requirements-windows.txt` (or stick with the unified `requirements.txt`).
-4. Run uvicorn (module form avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 9000`.
-5. Browse to `http://127.0.0.1:9000/docs` for Swagger (root `/` returns `{"detail":"Not Found"}` by design).
+4. Run uvicorn (module form avoids PATH issues): `python -m uvicorn src.gateway.app:app --reload --port 5000`.
+5. Browse to `http://127.0.0.1:5000/docs` for Swagger (root `/` returns `{"detail":"Not Found"}` by design).
 
 ## Training Pipeline (src/ml/train)
 1. `python src/ml/train/ingest.py` – merge raw CSVs into `dataset/interim/raw_merged.csv`.
@@ -38,7 +38,7 @@ Notes:
 - If `dataset/interim/aquarium_tinyml_features.csv` is missing, generate it via steps 1-4 above (a smaller sample also exists at `dataset/interim/aquarium_tinyml_interim_sample.csv` for quick experiments).
 
 ## Gateway API (src/gateway)
-- Run with: `uvicorn src.gateway.app:app --reload --port 9000`.
+- Run với: `python src/gateway/ml/app.py` (có sẵn `if __main__` để gọi uvicorn trên port 5000). Nếu muốn tự quản lý bằng uvicorn: `python -m uvicorn src.gateway.ml.app:app --reload --port 5000`.
 - Key endpoints:
   - `POST /ingest/telemetry` – store telemetry JSON (validated via Pydantic).
   - `GET /telemetry` – retrieve raw JSONL rows for analytics/training.
@@ -51,5 +51,5 @@ Notes:
 
 ### Flask Telemetry API (src/gateway/flask_api)
 - Lightweight Flask endpoints (`app.py`) push turbidity, temperature/humidity, and water depth rows into MySQL via SQLAlchemy.
-- Shares the same dependency list as the FastAPI gateway: `python -m pip install -r src/gateway/requirements.txt` then `python src/gateway/flask_api/app.py`.
-- Docker/Compose helpers now live alongside the service: `cd src/gateway/flask_api` then `docker-compose up --build` (build context points back to the repo root so the shared requirements file is copied in automatically).
+- Shares the same dependency list as the FastAPI gateway: `python -m pip install -r requirements-base.txt` rồi `python src/gateway/flask_api/app.py`.
+- Docker/Compose helpers now live alongside the service: `cd src/gateway/flask_api` rồi `docker-compose up --build` (build context points back to the repo root so the shared requirements file is copied in automatically).

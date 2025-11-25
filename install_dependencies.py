@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 ROOT_REQUIREMENTS = REPO_ROOT / "requirements.txt"
-GATEWAY_REQUIREMENTS = REPO_ROOT / "src" / "gateway" / "requirements.txt"
+GATEWAY_REQUIREMENTS = REPO_ROOT / "requirements-base.txt"
 
 
 def run(cmd: list[str]) -> None:
@@ -39,7 +39,7 @@ def main() -> None:
     parser.add_argument(
         "--gateway",
         action="store_true",
-        help="Chỉ cài deps của gateway (src/gateway/requirements.txt).",
+        help="Chỉ cài deps của gateway (requirements-base.txt).",
     )
     parser.add_argument(
         "--file",
