@@ -1,10 +1,9 @@
-import json
-import os
-from datetime import datetime
-
+import requests
 from flask import Flask, render_template, redirect, url_for, request, jsonify
-from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from models import db, User, SystemData
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user
+import json
+from datetime import datetime
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secretkey_cua_ban' # Đổi thành chuỗi ngẫu nhiên
@@ -98,63 +97,197 @@ def control_device():
         
     return jsonify({"status": "updated", "device": device, "state": action})
 
-# API 4.3: Lấy dữ liệu mới nhất (Cho Frontend AJAX gọi để cập nhật thẻ)
+# ============================================================
+# HÀM HỖ TRỢ LẤY DỮ LIỆU TỪ API NGOÀI
+# ============================================================
+def fetch_external_api(url):
+    try:
+        # Gọi API với timeout 2 giây để không làm treo server nếu mạng lag
+        response = requests.get(url, timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            # Giả sử API trả về 1 danh sách, ta lấy phần tử cuối cùng (mới nhất)
+            if isinstance(data, list) and len(data) > 0:
+                return data[-1] 
+            return data # Hoặc trả về chính nó nếu không phải list
+    except Exception as e:
+        print(f"Lỗi khi gọi {url}: {e}")
+        return None
+    return None
+
+# ============================================================
+# SỬA LẠI API GET LATEST (QUAN TRỌNG NHẤT)
+# ============================================================
+# ... (Các import cũ giữ nguyên) ...
+
+# Biến toàn cục để lưu trạng thái bơm tự động (giả lập lưu trong RAM)
+# Trong thực tế, bạn nên lưu vào Database nếu muốn nó nhớ sau khi restart server
+auto_pump_status = False 
+
 @app.route('/api/get_latest', methods=['GET'])
 @login_required
 def get_latest_data():
-    latest = SystemData.query.order_by(SystemData.timestamp.desc()).first()
-    if latest:
-        return jsonify({
-            "temp": latest.temperature,
-            "ph": latest.ph_level,
-            "light": latest.light_status,
-            "pump": latest.pump_status
-        })
-    # Trả về giá trị mặc định nếu DB rỗng
-    return jsonify({"temp": 0, "ph": 0, "light": False, "pump": False})
+    global auto_pump_status
+
+    # 1. API các nguồn
+    url_turbidity = "http://nhungapi.laptrinhpython.net/api/turbidity/all"
+    url_temp_hum = "http://nhungapi.laptrinhpython.net/api/temperature_humidity/all"
+    url_water = "http://nhungapi.laptrinhpython.net/api/water/all"
+
+    # 2. Gọi API
+    raw_turbidity = fetch_external_api(url_turbidity)
+    raw_temp_hum = fetch_external_api(url_temp_hum)
+    raw_water = fetch_external_api(url_water)
+    
+    # --- DEBUG: In ra terminal để xem API Độ đục trả về cái gì ---
+    print("--- DEBUG TURBIDITY ---")
+    print(raw_turbidity) 
+    # -----------------------------------------------------------
+
+    # 3. Chuẩn bị kết quả (QUAN TRỌNG: Phải khai báo đủ các key mặc định)
+    result = {
+        "temp": 0,
+        "hum": 0,
+        "water": 0,
+        "turbidity": 0,    # <--- Lỗi 'undefined' do thiếu dòng này nếu API lỗi
+        "pump_auto": auto_pump_status
+    }
+
+    # 4. Gán dữ liệu (Mapping)
+    if raw_temp_hum:
+        result["temp"] = raw_temp_hum.get("temperature", 0)
+        result["hum"] = raw_temp_hum.get("humidity", 0)
+        
+    if raw_water:
+        result["water"] = raw_water.get("distance", raw_water.get("value", 0))
+    
+    # Xử lý riêng cho Độ đục (Kiểm tra kỹ các key có thể xảy ra)
+    if raw_turbidity:
+        # Dựa vào hình ảnh bạn gửi, key chứa dữ liệu là "raw"
+        # Chúng ta dùng .get("raw", 0) để lấy nó
+        val = raw_turbidity.get("raw", 0)
+        result["turbidity"] = val
+
+    # Logic tự động hóa bơm (Giữ nguyên)
+    if result["water"] < 2000:
+        auto_pump_status = True
+    elif result["water"] >= 4096:
+        auto_pump_status = False
+
+    result["pump_auto"] = auto_pump_status
+    
+    return jsonify(result)
 
 # 4.5 API MỚI: Cung cấp dữ liệu lịch sử cho biểu đồ
+# ... (Phần import và code cũ giữ nguyên) ...
+
 @app.route('/api/get_chart_data')
 @login_required
 def get_chart_data():
-    # 1. Lấy 20 bản ghi mới nhất (đã lọc lỗi timestamp None)
-    records = SystemData.query.filter(SystemData.timestamp != None)\
-                              .order_by(SystemData.timestamp.desc())\
-                              .limit(20).all()
-    records.reverse() # Đảo lại để xếp theo thời gian tăng dần
+    # 1. Định nghĩa link lấy TOÀN BỘ dữ liệu lịch sử
+    url_turbidity_all = "http://nhungapi.laptrinhpython.net/api/turbidity/all"
+    url_temp_hum_all = "http://nhungapi.laptrinhpython.net/api/temperature_humidity/all"
+    url_water_all = "http://nhungapi.laptrinhpython.net/api/water/all"
 
-    # 2. Chuẩn bị dữ liệu cho Biểu đồ Đường (Line) & Cột (Bar)
-    labels = []
-    temperatures = []
-    phs = []
+    # 2. Hàm phụ trợ để lấy list dữ liệu an toàn
+    def fetch_list(url):
+        try:
+            resp = requests.get(url, timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+            return []
+        except:
+            return []
+
+    # 3. Lấy dữ liệu từ 3 nguồn
+    list_turbidity = fetch_list(url_turbidity_all)
+    list_temp_hum = fetch_list(url_temp_hum_all)
+    list_water = fetch_list(url_water_all)
+
+    # 4. Xử lý dữ liệu: Chỉ lấy 20 phần tử CUỐI CÙNG (Mới nhất)
+    # Lưu ý: Các API này có thể có số lượng bản ghi khác nhau, ta lấy theo list_temp_hum làm chuẩn
+    limit = 20
     
-    # 3. Biến đếm cho Biểu đồ Tròn (Pie) - Thống kê Bơm
-    pump_on_count = 0
-    pump_off_count = 0
+    # Cắt 20 phần tử cuối
+    data_temp_hum = list_temp_hum[-limit:] 
+    data_water = list_water[-limit:]
+    data_turbidity = list_turbidity[-limit:]
 
-    for rec in records:
-        time_str = rec.timestamp.strftime('%H:%M:%S')
-        labels.append(time_str)
-        temperatures.append(rec.temperature)
-        phs.append(rec.ph_level)
+    # 5. Chuẩn bị mảng để vẽ
+    labels = []       # Trục hoành (Thời gian)
+    temps = []        # Nhiệt độ
+    hums = []         # Độ ẩm
+    waters = []       # Mực nước
+    turbidities = []  # Độ đục
+
+    # Duyệt qua danh sách nhiệt độ để tạo khung thời gian
+    for item in data_temp_hum:
+        # Giả sử API trả về field 'created_at' hoặc 'time', nếu không ta dùng số thứ tự
+        # Ở đây ta lấy giờ từ chuỗi thời gian nếu có, hoặc để trống
+        time_str = item.get('created_at', '') # Bạn cần kiểm tra key thực tế của API
+        # Nếu time_str dài quá, ta cắt bớt chỉ lấy giờ:phút:giây
+        if len(time_str) > 10:
+             time_str = time_str[11:19] 
         
-        # Đếm trạng thái bơm
-        if rec.pump_status:
-            pump_on_count += 1
-        else:
-            pump_off_count += 1
+        labels.append(time_str)
+        temps.append(item.get('temperature', 0))
+        hums.append(item.get('humidity', 0))
 
-    # 4. Trả về JSON chứa tất cả dữ liệu
+    # Xử lý riêng cho Mực nước (vì list có thể lệch nhau, ta chỉ map theo index)
+    for item in data_water:
+        waters.append(item.get('distance', item.get('value', 0)))
+    
+    # Xử lý riêng cho Độ đục (SỬA LẠI ĐOẠN NÀY)
+    for item in data_turbidity:
+        # Lấy giá trị từ key "raw"
+        turbidities.append(item.get('raw', 0))
+
+    # Trả về JSON
     return jsonify({
         "labels": labels,
-        "temperatures": temperatures,
-        "phs": phs,
-        "pump_stats": [pump_on_count, pump_off_count] # Dữ liệu mới cho Pie Chart
+        "temps": temps,
+        "hums": hums,
+        "waters": waters,
+        "turbidities": turbidities
     })
 
-# ... (Phần code điều khiển /api/control) ...
+# API DÀNH RIÊNG CHO SERVER GATEWAY
+@app.route('/api/gateway/command', methods=['GET'])
+def gateway_command():
+    global auto_pump_status
+    
+    # Lấy lại dữ liệu mực nước mới nhất một lần nữa để đảm bảo tính thời gian thực
+    # (Hoặc bạn có thể tối ưu bằng cách lưu cache biến current_water_level ở trên)
+    url_water = "http://nhungapi.laptrinhpython.net/api/water/all"
+    raw_water = fetch_external_api(url_water)
+    
+    current_level = 0
+    if raw_water:
+        current_level = raw_water.get("distance", raw_water.get("value", 0))
+
+    # Chạy lại logic để chắc chắn (Redundant check)
+    command = "KEEP" # Giữ nguyên
+    
+    if current_level < 2000:
+        auto_pump_status = True
+        command = "ON"
+    elif current_level >= 4096:
+        auto_pump_status = False
+        command = "OFF"
+    else:
+        # Nếu nằm giữa, trạng thái phụ thuộc vào biến auto_pump_status đang lưu
+        command = "ON" if auto_pump_status else "OFF"
+
+    # Trả về JSON theo định dạng chuẩn để Gateway dễ parse
+    return jsonify({
+        "device": "water_pump",
+        "command": command,       # "ON" hoặc "OFF"
+        "is_active": auto_pump_status, # true/false
+        "current_level": current_level,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
 
 if __name__ == '__main__':
-    # Default dashboard port avoids clashing with the ingestion/ML APIs.
-    port = int(os.getenv("DASHBOARD_PORT", "3000"))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0')

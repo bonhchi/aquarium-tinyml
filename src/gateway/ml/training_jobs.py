@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+import json
 import uuid
 import traceback
 
@@ -17,6 +18,7 @@ from .schemas import TrainingJobConfigPayload, TrainingJobInfo
 
 LOG_DIR = Path("ml/training_logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE_PREFIX = "train_aquarium"
 
 
 @dataclass
@@ -27,6 +29,8 @@ class TrainingJobRecord:
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     log_path: Path = field(default_factory=lambda: LOG_DIR / f"{uuid.uuid4().hex}.log")
+    result_path: Path = field(default_factory=lambda: LOG_DIR / f"{uuid.uuid4().hex}.json")
+    epoch_history_path: Path = field(default_factory=lambda: LOG_DIR / f"{uuid.uuid4().hex}_epochs.json")
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
@@ -60,12 +64,31 @@ def _merge_training_config(body: TrainingJobConfigPayload) -> TrainingConfig:
     return cfg
 
 
+def _allocate_log_paths() -> tuple[Path, Path, Path]:
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    base_name = f"{LOG_FILE_PREFIX}_{stamp}"
+    log_path = LOG_DIR / f"{base_name}.log"
+    result_path = LOG_DIR / f"{base_name}.json"
+    epoch_path = LOG_DIR / f"{base_name}_epochs.json"
+    counter = 1
+    while log_path.exists() or result_path.exists() or epoch_path.exists():
+        suffix = f"{base_name}_{counter}"
+        log_path = LOG_DIR / f"{suffix}.log"
+        result_path = LOG_DIR / f"{suffix}.json"
+        epoch_path = LOG_DIR / f"{suffix}_epochs.json"
+        counter += 1
+    return log_path, result_path, epoch_path
+
+
 async def start_training_job(config_payload: TrainingJobConfigPayload) -> TrainingJobInfo:
     job_id = uuid.uuid4().hex
+    log_path, result_path, epoch_path = _allocate_log_paths()
     record = TrainingJobRecord(
         job_id=job_id,
         config=config_payload,
-        log_path=LOG_DIR / f"{job_id}.log",
+        log_path=log_path,
+        result_path=result_path,
+        epoch_history_path=epoch_path,
         notes=config_payload.notes,
     )
     async with _LOCK:
@@ -89,7 +112,11 @@ async def _run_job(record: TrainingJobRecord) -> None:
             log_file.flush()
             try:
                 with redirect_stdout(log_file), redirect_stderr(log_file):
-                    result = train_model(cfg, log_path=str(record.log_path))
+                    result = train_model(
+                        cfg,
+                        log_path=str(record.log_path),
+                        epoch_history_path=str(record.epoch_history_path),
+                    )
             except Exception:  # pylint: disable=broad-except
                 log_file.write("\n[ERROR] Training crashed:\n")
                 traceback.print_exc(file=log_file)
@@ -109,6 +136,35 @@ async def _run_job(record: TrainingJobRecord) -> None:
         record.status = "succeeded"
     finally:
         record.finished_at = datetime.utcnow()
+        _persist_result_json(record)
+
+
+def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return f"{value.isoformat()}Z"
+
+
+def _persist_result_json(record: TrainingJobRecord) -> None:
+    if not record.result_path:
+        return
+    payload = {
+        "jobId": record.job_id,
+        "status": record.status,
+        "startedAt": _serialize_datetime(record.started_at),
+        "finishedAt": _serialize_datetime(record.finished_at),
+        "logPath": str(record.log_path),
+        "epochHistoryPath": str(record.epoch_history_path),
+        "result": record.result,
+        "error": record.error,
+        "notes": record.notes,
+        "config": record.config.model_dump(exclude_none=True),
+    }
+    try:
+        with open(record.result_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+    except OSError as exc:  # pragma: no cover - unlikely path
+        print(f"[WARN] Không thể ghi file kết quả training {record.result_path}: {exc}")
 
 
 def _record_to_schema(record: TrainingJobRecord) -> TrainingJobInfo:
@@ -119,6 +175,8 @@ def _record_to_schema(record: TrainingJobRecord) -> TrainingJobInfo:
         startedAt=record.started_at,
         finishedAt=record.finished_at,
         logPath=str(record.log_path),
+        epochHistoryPath=str(record.epoch_history_path),
+        resultJsonPath=str(record.result_path),
         result=record.result,
         error=record.error,
     )

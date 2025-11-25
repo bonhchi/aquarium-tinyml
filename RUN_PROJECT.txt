@@ -66,3 +66,17 @@ Ghi chú bổ sung
 ---------------
 - Các script training trong `src/ml/train` cần dataset ở `dataset/interim`. Nếu thiếu, hãy chạy pipeline ingest → weak_label → preprocess → features trước.
 - Dòng cuối của mỗi app (Flask/FastAPI) đọc biến môi trường để không trùng port, nên khi deploy nhớ cấu hình `.env` hoặc systemd service tương ứng.
+
+Json Mẫu training
+{
+  "datasetFile": "dataset/labeled/aquarium_tinyml_dataset_labeled_sample.csv",
+  "modelOut": "ml/artifacts/aquarium_classifier.keras",
+  "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
+  "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
+  "epochs": 125,
+  "batchSize": 64,
+  "valSize": 0.15,
+  "testSize": 0.15,
+  "randomState": 42,
+  "notes": "Baseline training run on full feature CSV"
+}

@@ -1,0 +1,42 @@
+{
+  "jobId": "5e58c0e959be4610bc5a625457b39722",
+  "status": "succeeded",
+  "startedAt": "2025-11-25T13:17:22.966243Z",
+  "finishedAt": "2025-11-25T13:17:30.765642Z",
+  "logPath": "ml\\training_logs\\train_aquarium_20251125-131722.log",
+  "result": {
+    "modelPath": "ml/artifacts/aquarium_classifier.keras",
+    "metricsPath": "ml/artifacts/aquarium_classifier_metrics.json",
+    "labelEncoderPath": "ml/artifacts/label_encoder.joblib",
+    "trainSamples": 1050,
+    "valSamples": 225,
+    "testSamples": 225,
+    "features": [
+      "temp_c",
+      "ph",
+      "tds_ppm",
+      "turbidity_ntu",
+      "orp_mV",
+      "lux",
+      "aerator_on",
+      "pump_on",
+      "hour",
+      "is_daylight"
+    ],
+    "runDir": "ml\\artifacts\\runs\\20251125-131730-3837d9"
+  },
+  "error": null,
+  "notes": "Baseline training run on full feature CSV",
+  "config": {
+    "datasetFile": "dataset/labeled/aquarium_tinyml_dataset_labeled_sample.csv",
+    "modelOut": "ml/artifacts/aquarium_classifier.keras",
+    "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
+    "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
+    "epochs": 25,
+    "batchSize": 64,
+    "valSize": 0.15,
+    "testSize": 0.15,
+    "randomState": 42,
+    "notes": "Baseline training run on full feature CSV"
+  }
+}

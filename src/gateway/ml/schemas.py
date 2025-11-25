@@ -98,5 +98,7 @@ class TrainingJobInfo(BaseModel):
     startedAt: Optional[datetime] = None
     finishedAt: Optional[datetime] = None
     logPath: str
+    epochHistoryPath: Optional[str] = None
+    resultJsonPath: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None

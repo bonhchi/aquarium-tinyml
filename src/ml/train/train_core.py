@@ -37,6 +37,10 @@ import tensorflow as tf
 from tensorflow import keras
 
 tf.get_logger().setLevel("ERROR")
+try:
+    tf.keras.utils.disable_interactive_logging()
+except AttributeError:
+    pass
 
 # =============================================================
 # Cấu hình cơ bản
@@ -187,11 +191,30 @@ def _write_history_csv(history: keras.callbacks.History, csv_path: Path) -> None
         writer.writerows(rows)
 
 
+def _write_epoch_history_json(history: keras.callbacks.History, json_path: Path) -> None:
+    """Lưu thông số từng epoch ra file JSON để dễ trực quan hóa."""
+    if not json_path:
+        return
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: Dict[str, Any] = {"epochs": []}
+    history_dict = {key: [float(v) for v in values] for key, values in history.history.items()}
+    max_len = max((len(values) for values in history_dict.values()), default=0)
+    for idx in range(max_len):
+        entry: Dict[str, Any] = {"epoch": idx + 1}
+        for key, values in history_dict.items():
+            if idx < len(values):
+                entry[key] = values[idx]
+        payload["epochs"].append(entry)
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+
+
 def archive_training_run(
     cfg: TrainingConfig,
     history: keras.callbacks.History,
     summary: Dict[str, Any],
     log_path: Optional[str] = None,
+    epoch_history_path: Optional[str] = None,
 ) -> Path:
     """Lưu trữ kết quả mỗi lần chạy vào thư mục timestamp."""
     RUN_ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -212,6 +235,9 @@ def archive_training_run(
     if log_path and os.path.exists(log_path):
         shutil.copy2(log_path, run_dir / "training.log")
 
+    if epoch_history_path and os.path.exists(epoch_history_path):
+        shutil.copy2(epoch_history_path, run_dir / "epoch_history.json")
+
     for artifact_path in (cfg.model_out, cfg.metrics_out, cfg.label_encoder_out):
         if artifact_path and os.path.exists(artifact_path):
             dest = run_dir / Path(artifact_path).name
@@ -224,7 +250,11 @@ def archive_training_run(
 # =============================================================
 # Hàm chính
 # =============================================================
-def train_model(config: Optional[TrainingConfig] = None, log_path: Optional[str] = None):
+def train_model(
+    config: Optional[TrainingConfig] = None,
+    log_path: Optional[str] = None,
+    epoch_history_path: Optional[str] = None,
+):
     """Huấn luyện model MLP và lưu lại model + metrics."""
     cfg = config or TrainingConfig()
     if cfg.val_size <= 0 or cfg.test_size <= 0:
@@ -259,20 +289,17 @@ def train_model(config: Optional[TrainingConfig] = None, log_path: Optional[str]
     print(f"Class weights (train): {class_weights}")
 
     model = build_tiny_mlp(X_train.shape[1])
-    callbacks = [
-        keras.callbacks.EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True)
-    ]
-
     history = model.fit(
         X_train,
         y_train,
         validation_data=(X_val, y_val),
         epochs=cfg.epochs,
         batch_size=cfg.batch_size,
-        verbose=1,
-        callbacks=callbacks,
+        verbose=2,
         class_weight=class_weights,
     )
+    if epoch_history_path:
+        _write_epoch_history_json(history, Path(epoch_history_path))
 
     eval_metrics = model.evaluate(X_test, y_test, verbose=0, return_dict=True)
     test_loss = float(eval_metrics.get("loss", 0.0))
@@ -300,7 +327,13 @@ def train_model(config: Optional[TrainingConfig] = None, log_path: Optional[str]
         "features": feature_cols,
     }
     summary_with_metrics = {**summary, "metrics": metrics_payload}
-    run_dir = archive_training_run(cfg, history, summary_with_metrics, log_path=log_path)
+    run_dir = archive_training_run(
+        cfg,
+        history,
+        summary_with_metrics,
+        log_path=log_path,
+        epoch_history_path=epoch_history_path,
+    )
     summary["runDir"] = str(run_dir)
     return summary
 
