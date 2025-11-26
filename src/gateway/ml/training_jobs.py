@@ -45,6 +45,8 @@ def _merge_training_config(body: TrainingJobConfigPayload) -> TrainingConfig:
     data = body.model_dump(exclude_unset=True)
 
     cfg.input_file = data.get("datasetFile") or str(settings.TRAINING_DATA_FILE)
+    if data.get("extraDatasets"):
+        cfg.extra_datasets = data["extraDatasets"]
     if data.get("modelOut"):
         cfg.model_out = data["modelOut"]
     if data.get("metricsOut"):
@@ -61,6 +63,12 @@ def _merge_training_config(body: TrainingJobConfigPayload) -> TrainingConfig:
         cfg.test_size = data["testSize"]
     if data.get("randomState") is not None:
         cfg.random_state = data["randomState"]
+    if data.get("pushAdjustmentUrl"):
+        cfg.push_adjustment_url = data["pushAdjustmentUrl"]
+    if data.get("pondId"):
+        cfg.pond_id = data["pondId"]
+    if data.get("modelId"):
+        cfg.model_id = data["modelId"]
     return cfg
 
 

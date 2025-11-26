@@ -72,7 +72,7 @@
                             <h3 class="mb-2"><span id="water-val">--</span> cm</h3>
                             <p class="mb-2">Mực nước</p>
                             <div class="mb-0">
-                                <span id="auto-pump-badge" class="badge bg-secondary">Bơm: TẮT</span>
+                                <span id="auto-pump-badge" class="badge bg-secondary"></span>
                             </div>
                         </div>
                         <div class="d-inline-block ms-3">
@@ -82,14 +82,31 @@
                 </div>
             </div>
         </div>
-    </div>
 
-<div class="row mt-4">
+        <div class="col-12 col-sm-6 col-xxl-3 d-flex">
+            <div class="card flex-fill">
+                <div class="card-body py-4">
+                    <div class="d-flex align-items-start">
+                        <div class="flex-grow-1">
+                            <h3 class="mb-2"><span id="ph-val">--</span></h3>
+                            <p class="mb-2">Độ pH của nước</p>
+                            <div class="mb-0"><span class="badge bg-success">Cảm biến 4</span></div>
+                        </div>
+                        <div class="d-inline-block ms-3">
+                            <div class="stat"><i class="align-middle text-success" data-feather="activity"></i></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+</div>
+
+    <div class="row mt-4">
         <div class="col-12">
             <div class="card flex-fill w-100">
                 <div class="card-header">
                     <span class="badge bg-primary float-end">Real-time Update</span>
-                    <h5 class="card-title mb-0">Biểu đồ Đa thông số (Nhiệt độ - Độ ẩm - Mực nước)</h5>
+                    <h5 class="card-title mb-0">Biểu đồ Đa thông số (Nhiệt độ - Độ ẩm - Mực nước - Độ pH)</h5>
                 </div>
                 <div class="card-body">
                     <div class="chart chart-lg">
@@ -120,11 +137,12 @@
                     <h5 class="card-title mb-0">Ghi chú hệ thống</h5>
                 </div>
                 <div class="card-body">
-                   <p>Hệ thống đang lấy dữ liệu từ 3 trạm quan trắc:</p>
+                   <p>Hệ thống đang lấy dữ liệu từ 4 trạm quan trắc:</p>
                    <ul>
-                       <li>API Nhiệt độ/Độ ẩm: <strong>Online</strong></li>
-                       <li>API Mực nước: <strong>Online</strong></li>
-                       <li>API Độ đục: <strong>Online</strong></li>
+                       <li>API Nhiệt độ/Độ ẩm: <strong id="status-temp" class="text-success">Online</strong></li>
+                       <li>API Mực nước: <strong id="status-water" class="text-success">Online</strong></li>
+                       <li>API Độ đục: <strong id="status-turbidity" class="text-success">Online</strong></li>
+                       <li>API Độ pH: <strong id="status-ph" class="text-success">Online</strong></li>
                    </ul>
                    <div class="alert alert-success">Dữ liệu được làm mới mỗi 5 giây</div>
                 </div>
@@ -143,36 +161,58 @@
         var mainChart = new Chart(ctxMain, {
             type: "line",
             data: {
-                labels: [], // Sẽ cập nhật sau
+                labels: [], 
                 datasets: [{
                     label: "Nhiệt độ (°C)",
-                    borderColor: window.theme.danger, // Màu đỏ
+                    borderColor: window.theme.danger,
                     backgroundColor: "transparent",
                     data: [],
                     yAxisID: 'y-axis-1',
                 }, {
                     label: "Độ ẩm (%)",
-                    borderColor: window.theme.primary, // Màu xanh
+                    borderColor: window.theme.primary,
                     backgroundColor: "transparent",
                     borderDash: [5, 5],
                     data: [],
                     yAxisID: 'y-axis-1',
-                }, {
+                }, 
+                // --- DATASET MỚI CHO PH ---
+                {
+                    label: "Độ pH",
+                    borderColor: window.theme.success, // Màu xanh lá
+                    backgroundColor: "transparent",
+                    borderWidth: 2,
+                    data: [],
+                    yAxisID: 'y-axis-1', // Dùng chung trục trái với Nhiệt độ
+                },
+                // --------------------------
+                {
                     label: "Mực nước (cm)",
-                    borderColor: window.theme.info, // Màu tím/xanh nhạt
+                    borderColor: window.theme.info,
                     backgroundColor: "rgba(0, 0, 0, 0)",
                     data: [],
-                    yAxisID: 'y-axis-2', // Trục Y thứ 2 bên phải
+                    yAxisID: 'y-axis-2', // Trục phải
                 }]
             },
             options: {
                 maintainAspectRatio: false,
-                animation: { duration: 0 }, // Tắt hiệu ứng để real-time mượt hơn
+                animation: { duration: 0 },
                 scales: {
                     xAxes: [{ reverse: false, gridLines: { color: "rgba(0,0,0,0.05)" } }],
                     yAxes: [
-                        { id: 'y-axis-1', type: 'linear', position: 'left', ticks: { fontColor: window.theme.danger } },
-                        { id: 'y-axis-2', type: 'linear', position: 'right', gridLines: { drawOnChartArea: false }, ticks: { fontColor: window.theme.info } }
+                        { 
+                            id: 'y-axis-1', 
+                            type: 'linear', 
+                            position: 'left', 
+                            ticks: { fontColor: window.theme.danger } 
+                        },
+                        { 
+                            id: 'y-axis-2', 
+                            type: 'linear', 
+                            position: 'right', 
+                            gridLines: { drawOnChartArea: false }, 
+                            ticks: { fontColor: window.theme.info } 
+                        }
                     ]
                 }
             }
@@ -185,7 +225,7 @@
             data: {
                 labels: [],
                 datasets: [{
-                    label: "Độ đục (NTU)",
+                    label: "Độ đục (Raw)",
                     backgroundColor: window.theme.warning,
                     hoverBackgroundColor: window.theme.warning,
                     data: []
@@ -201,27 +241,46 @@
         });
 
         // --- 3. HÀM CẬP NHẬT DỮ LIỆU CHUNG (REAL-TIME) ---
-        // --- 3. HÀM CẬP NHẬT DỮ LIỆU CHUNG (REAL-TIME) ---
         function updateAllData() {
-            // A. Cập nhật thẻ số & Trạng thái Bơm
+            // A. Cập nhật thẻ số
             fetch('/api/get_latest')
                 .then(res => res.json())
                 .then(data => {
-                    // Cập nhật số liệu các cảm biến
                     if(document.getElementById('temp-val')) document.getElementById('temp-val').innerText = data.temp;
                     if(document.getElementById('hum-val')) document.getElementById('hum-val').innerText = data.hum;
                     if(document.getElementById('tur-val')) document.getElementById('tur-val').innerText = data.turbidity;
                     if(document.getElementById('water-val')) document.getElementById('water-val').innerText = data.water;
+                    if(document.getElementById('ph-val')) document.getElementById('ph-val').innerText = data.ph;
 
-                    // --- PHẦN MỚI: Cập nhật Badge trạng thái Bơm ---
+                    // --- CẬP NHẬT TRẠNG THÁI ONLINE/OFFLINE ---
+                    
+                    // Hàm phụ trợ để đổi màu và chữ nhanh
+                    function setStatus(elementId, isOnline) {
+                        const el = document.getElementById(elementId);
+                        if(el) {
+                            if(isOnline) {
+                                el.innerText = "Online";
+                                el.className = "text-success"; // Màu xanh
+                            } else {
+                                el.innerText = "Offline";
+                                el.className = "text-danger";  // Màu đỏ
+                            }
+                        }
+                    }
+
+                    // Gọi hàm cho từng API
+                    setStatus('status-temp', data.status_temp);
+                    setStatus('status-water', data.status_water);
+                    setStatus('status-turbidity', data.status_turbidity);
+                    setStatus('status-ph', data.status_ph);
+
+                    // Cập nhật Badge Bơm
                     const pumpBadge = document.getElementById('auto-pump-badge');
                     if (pumpBadge) {
                         if (data.pump_auto) {
-                            // Nếu đang bơm: Màu xanh + Nhấp nháy
                             pumpBadge.className = 'badge bg-success animate-blink'; 
                             pumpBadge.innerText = 'Bơm TỰ ĐỘNG: ĐANG CHẠY';
                         } else {
-                            // Nếu tắt: Màu xám
                             pumpBadge.className = 'badge bg-secondary';
                             pumpBadge.innerText = 'Bơm TỰ ĐỘNG: ĐANG NGHỈ';
                         }
@@ -229,7 +288,7 @@
                 })
                 .catch(err => console.error("Lỗi cập nhật số liệu:", err));
 
-            // B. Cập nhật Biểu đồ (Giữ nguyên)
+            // B. Cập nhật Biểu đồ
             fetch('/api/get_chart_data')
                 .then(res => res.json())
                 .then(data => {
@@ -237,7 +296,9 @@
                     mainChart.data.labels = data.labels;
                     mainChart.data.datasets[0].data = data.temps;
                     mainChart.data.datasets[1].data = data.hums;
-                    mainChart.data.datasets[2].data = data.waters;
+                    mainChart.data.datasets[2].data = data.phs;
+                    mainChart.data.datasets[3].data = data.waters;
+                    
                     mainChart.update();
 
                     // Update Bar Chart
@@ -247,9 +308,10 @@
                 })
                 .catch(err => console.error("Lỗi tải biểu đồ:", err));
         }
+
         // --- 4. CHẠY ---
-        updateAllData(); // Chạy ngay lần đầu
-        setInterval(updateAllData, 5000); // Lặp lại mỗi 5 giây (Real-time)
+        updateAllData(); 
+        setInterval(updateAllData, 5000); 
     });
 </script>
 {% endblock %}

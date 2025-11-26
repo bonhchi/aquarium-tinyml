@@ -1,0 +1,1 @@
+{"timestamp": "2025-01-01T12:00:00", "device_id": "esp32_01", "temperature": 28.5, "humidity": 76.2, "turbidity_raw": 512, "turbidity_ntu": 4.3, "water_value": 1234, "dataset_type": "live_bundle", "meta": {"note": "live", "site_id": "pond-01"}}

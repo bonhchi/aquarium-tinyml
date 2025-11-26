@@ -31,6 +31,29 @@ class TelemetryPayload(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="allow")
 
 
+class GatewaySamplePayload(BaseModel):
+    """Payload gói telemetry tổng hợp do Gateway Main gửi sang ML."""
+
+    device_id: str = Field(..., min_length=1, description="ID gateway tổng hợp")
+    timestamp: Optional[str] = Field(
+        None, description="ISO datetime hoặc unix epoch; nếu trống sẽ dùng now"
+    )
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
+    turbidity_raw: Optional[float] = None
+    turbidity_ntu: Optional[float] = None
+    water_value: Optional[float] = None
+    ph: Optional[float] = None
+    label: Optional[str] = Field(None, description="Label nếu có (GOOD/BAD/...)")
+    dataset_type: str = Field(
+        "gateway",
+        description="Ghi chú loại dữ liệu (vd. gateway/live/weak_label) để debug/đối chiếu.",
+    )
+    meta: Dict[str, Any] = Field(default_factory=dict, description="Trường tự do thêm info.")
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+
 class TelemetryQuery(BaseModel):
     siteId: Optional[str] = Field(None, min_length=1)
     pondId: Optional[str] = Field(None, min_length=1)
@@ -78,6 +101,10 @@ class TrainingJobConfigPayload(BaseModel):
     datasetFile: Optional[str] = Field(
         None, description="Đường dẫn CSV features. Mặc định dùng settings.TRAINING_DATA_FILE."
     )
+    extraDatasets: Optional[list[str]] = Field(
+        None,
+        description="Danh sách CSV bổ sung (vd. dataset/gateway/gateway_samples.csv)",
+    )
     modelOut: Optional[str] = Field(None, description="Đường dẫn lưu model .keras")
     metricsOut: Optional[str] = Field(None, description="Đường dẫn lưu metrics.json")
     labelEncoderOut: Optional[str] = Field(None, description="Đường dẫn lưu label_encoder.joblib")
@@ -86,6 +113,12 @@ class TrainingJobConfigPayload(BaseModel):
     valSize: Optional[float] = Field(None, gt=0, lt=1)
     testSize: Optional[float] = Field(None, gt=0, lt=1)
     randomState: Optional[int] = Field(None, description="Seed tái lập kết quả")
+    pushAdjustmentUrl: Optional[str] = Field(
+        None,
+        description="Nếu set, sau khi train sẽ POST metrics về Gateway Main (vd. http://127.0.0.1:5001/api/model/adjustment)",
+    )
+    pondId: Optional[str] = Field(None, description="Pond ID gửi kèm khi push adjustment")
+    modelId: Optional[str] = Field(None, description="Model ID gửi kèm khi push adjustment")
     notes: Optional[str] = Field(None, max_length=500, description="Ghi chú cho job training")
 
     model_config = ConfigDict(str_strip_whitespace=True)

@@ -3,16 +3,20 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 
 if __package__:
+    from .config import settings
     from .model_store import load_model_meta, save_model_meta
     from .schemas import (
+        GatewaySamplePayload,
         ModelPublishRequest,
         TelemetryPayload,
         TelemetryQuery,
@@ -30,8 +34,10 @@ else:
     REPO_ROOT = Path(__file__).resolve().parents[3]
     if str(REPO_ROOT) not in sys.path:
         sys.path.append(str(REPO_ROOT))
+    from src.gateway.ml.config import settings
     from src.gateway.ml.model_store import load_model_meta, save_model_meta
     from src.gateway.ml.schemas import (
+        GatewaySamplePayload,
         ModelPublishRequest,
         TelemetryPayload,
         TelemetryQuery,
@@ -76,6 +82,55 @@ app = FastAPI(
     swagger_ui_parameters={"defaultModelsExpandDepth": 0},
 )
 
+GATEWAY_DATA_DIR = settings.GATEWAY_DATA_DIR
+GATEWAY_CSV = settings.GATEWAY_CSV
+GATEWAY_JSONL = GATEWAY_DATA_DIR / "gateway_samples.jsonl"
+GATEWAY_FIELDNAMES = [
+    "timestamp",
+    "device_id",
+    "temperature",
+    "humidity",
+    "turbidity_raw",
+    "turbidity_ntu",
+    "water_value",
+    "ph",
+    "label",
+    "dataset_type",
+    "source_file",
+    "meta_json",
+]
+GATEWAY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _parse_timestamp(ts: str | int | None) -> str:
+    """Trả về timestamp ISO; dùng now nếu trống hoặc lỗi."""
+    if ts is None:
+        return datetime.utcnow().isoformat()
+    try:
+        if isinstance(ts, (int, float)):
+            return datetime.utcfromtimestamp(float(ts)).isoformat()
+        return datetime.fromisoformat(str(ts)).isoformat()
+    except Exception:
+        return datetime.utcnow().isoformat()
+
+
+def _append_gateway_csv(row: dict) -> None:
+    """Ghi một dòng vào gateway_samples.csv, tự tạo header nếu chưa có."""
+    GATEWAY_CSV.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = GATEWAY_CSV.exists()
+    with GATEWAY_CSV.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=GATEWAY_FIELDNAMES)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({key: row.get(key, "") for key in GATEWAY_FIELDNAMES})
+
+
+def _append_gateway_jsonl(row: dict) -> None:
+    """Log JSONL để debug pipeline ingest."""
+    GATEWAY_JSONL.parent.mkdir(parents=True, exist_ok=True)
+    with GATEWAY_JSONL.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
 
 @app.post("/ingest/telemetry", tags=["telemetry"], summary="Nhận bản ghi telemetry")
 async def ingest_telemetry(payload: TelemetryPayload):
@@ -99,6 +154,36 @@ async def get_telemetry(filters: TelemetryQuery = Depends()):
         limit=filters.limit,
     )
     return {"rows": rows, "count": len(rows)}
+
+
+@app.post(
+    "/ingest/gateway-sample",
+    tags=["telemetry"],
+    summary="Nhận gói telemetry tổng từ Gateway Main và lưu CSV cho training",
+)
+async def ingest_gateway_sample(payload: GatewaySamplePayload = Body(...)):
+    """
+    Gateway ML nhận bundle 10 phút từ Gateway Main, log JSONL + append CSV `dataset/gateway/gateway_samples.csv`.
+    """
+    ts_iso = _parse_timestamp(payload.timestamp)
+    meta_json = payload.meta or {}
+    row = {
+        "timestamp": ts_iso,
+        "device_id": payload.device_id,
+        "temperature": payload.temperature,
+        "humidity": payload.humidity,
+        "turbidity_raw": payload.turbidity_raw,
+        "turbidity_ntu": payload.turbidity_ntu,
+        "water_value": payload.water_value,
+        "ph": payload.ph,
+        "label": payload.label or "",
+        "dataset_type": payload.dataset_type or "gateway",
+        "source_file": GATEWAY_CSV.name,
+        "meta_json": json.dumps(meta_json, ensure_ascii=False),
+    }
+    _append_gateway_csv(row)
+    _append_gateway_jsonl(row)
+    return {"ok": True, "csv": str(GATEWAY_CSV), "timestamp": ts_iso}
 
 
 @app.post("/model/publish", tags=["model"], summary="Publish model mới cho một hồ")

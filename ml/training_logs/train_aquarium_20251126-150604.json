@@ -1,0 +1,29 @@
+{
+  "jobId": "7c3743f3bdfb44b6b0e13976b79f992a",
+  "status": "failed",
+  "startedAt": "2025-11-26T15:06:04.011514Z",
+  "finishedAt": "2025-11-26T15:06:04.024336Z",
+  "logPath": "ml\\training_logs\\train_aquarium_20251126-150604.log",
+  "epochHistoryPath": "ml\\training_logs\\train_aquarium_20251126-150604_epochs.json",
+  "result": null,
+  "error": "Kh\u00f4ng t\u00ecm th\u1ea5y file dataset/interim/aquarium_tinyml_features.csv",
+  "notes": "Trigger t\u1eeb API",
+  "config": {
+    "datasetFile": "dataset/interim/aquarium_tinyml_features.csv",
+    "extraDatasets": [
+      "dataset/gateway/gateway_samples.csv"
+    ],
+    "modelOut": "ml/artifacts/aquarium_classifier.keras",
+    "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
+    "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
+    "epochs": 125,
+    "batchSize": 64,
+    "valSize": 0.15,
+    "testSize": 0.15,
+    "randomState": 42,
+    "pushAdjustmentUrl": "http://127.0.0.1:5001/api/model/adjustment",
+    "pondId": "pond-01",
+    "modelId": "aquarium_v1",
+    "notes": "Trigger t\u1eeb API"
+  }
+}

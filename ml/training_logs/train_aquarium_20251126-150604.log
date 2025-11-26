@@ -1,0 +1,16 @@
+# Training job 7c3743f3bdfb44b6b0e13976b79f992a
+Started: 2025-11-26T15:06:04.011514Z
+Config: {'input_file': 'dataset/interim/aquarium_tinyml_features.csv', 'extra_datasets': ['dataset/gateway/gateway_samples.csv'], 'model_out': 'ml/artifacts/aquarium_classifier.keras', 'metrics_out': 'ml/artifacts/aquarium_classifier_metrics.json', 'label_encoder_out': 'ml/artifacts/label_encoder.joblib', 'epochs': 125, 'batch_size': 64, 'test_size': 0.15, 'val_size': 0.15, 'random_state': 42, 'push_adjustment_url': 'http://127.0.0.1:5001/api/model/adjustment', 'pond_id': 'pond-01', 'model_id': 'aquarium_v1'}
+
+
+[ERROR] Training crashed:
+Traceback (most recent call last):
+  File "E:\Master\Embedded System\aquarium-tinyml\src\gateway\ml\training_jobs.py", line 123, in _runner
+    result = train_model(
+             ^^^^^^^^^^^^
+  File "E:\Master\Embedded System\aquarium-tinyml\src\ml\train\train_core.py", line 363, in train_model
+    X, y, feature_cols, encoder = load_dataset(cfg.input_file, cfg.extra_datasets)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Master\Embedded System\aquarium-tinyml\src\ml\train\train_core.py", line 98, in load_dataset
+    raise FileNotFoundError(f"Không tìm thấy file {file_path}")
+FileNotFoundError: Không tìm thấy file dataset/interim/aquarium_tinyml_features.csv

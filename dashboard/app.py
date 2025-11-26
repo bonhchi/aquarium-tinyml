@@ -1,3 +1,4 @@
+import os
 import requests
 from flask import Flask, render_template, redirect, url_for, request, jsonify
 from models import db, User, SystemData
@@ -10,6 +11,14 @@ app.config['SECRET_KEY'] = 'secretkey_cua_ban' # Đổi thành chuỗi ngẫu nh
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 
 db.init_app(app)
+
+# ngăn cache để tránh trình duyệt giữ trang login cũ (304) sau khi login
+@app.after_request
+def disable_cache(response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 # Cấu hình Login
 login_manager = LoginManager()
@@ -124,133 +133,138 @@ def fetch_external_api(url):
 # Trong thực tế, bạn nên lưu vào Database nếu muốn nó nhớ sau khi restart server
 auto_pump_status = False 
 
+    # 1. API các nguồn
+    # ============================================================
 @app.route('/api/get_latest', methods=['GET'])
 @login_required
 def get_latest_data():
     global auto_pump_status
 
-    # 1. API các nguồn
+    # 1. Định nghĩa các link API (Thêm link pH)
     url_turbidity = "http://nhungapi.laptrinhpython.net/api/turbidity/all"
     url_temp_hum = "http://nhungapi.laptrinhpython.net/api/temperature_humidity/all"
     url_water = "http://nhungapi.laptrinhpython.net/api/water/all"
+    url_ph = "http://nhungapi.laptrinhpython.net/api/ph/all"
 
     # 2. Gọi API
     raw_turbidity = fetch_external_api(url_turbidity)
     raw_temp_hum = fetch_external_api(url_temp_hum)
     raw_water = fetch_external_api(url_water)
-    
-    # --- DEBUG: In ra terminal để xem API Độ đục trả về cái gì ---
-    print("--- DEBUG TURBIDITY ---")
-    print(raw_turbidity) 
-    # -----------------------------------------------------------
+    raw_ph = fetch_external_api(url_ph)
 
-    # 3. Chuẩn bị kết quả (QUAN TRỌNG: Phải khai báo đủ các key mặc định)
+    # 3. Chuẩn bị kết quả
     result = {
-        "temp": 0,
-        "hum": 0,
-        "water": 0,
-        "turbidity": 0,    # <--- Lỗi 'undefined' do thiếu dòng này nếu API lỗi
-        "pump_auto": auto_pump_status
+        "temp": 0, "hum": 0, "water": 0, "turbidity": 0, "ph": 0,
+        "pump_auto": auto_pump_status,
+        
+        # --- THÊM 4 DÒNG TRẠNG THÁI NÀY ---
+        # Nếu biến raw_... có dữ liệu (không phải None) -> True (Online)
+        # Ngược lại -> False (Offline)
+        "status_temp": True if raw_temp_hum else False,
+        "status_water": True if raw_water else False,
+        "status_turbidity": True if raw_turbidity else False,
+        "status_ph": True if raw_ph else False
     }
 
-    # 4. Gán dữ liệu (Mapping)
+    # 4. Xử lý dữ liệu
     if raw_temp_hum:
-        result["temp"] = raw_temp_hum.get("temperature", 0)
-        result["hum"] = raw_temp_hum.get("humidity", 0)
+        result["temp"] = raw_temp_hum.get("temperature", raw_temp_hum.get("temp", 0))
+        result["hum"] = raw_temp_hum.get("humidity", raw_temp_hum.get("hum", 0))
         
     if raw_water:
         result["water"] = raw_water.get("distance", raw_water.get("value", 0))
     
-    # Xử lý riêng cho Độ đục (Kiểm tra kỹ các key có thể xảy ra)
     if raw_turbidity:
-        # Dựa vào hình ảnh bạn gửi, key chứa dữ liệu là "raw"
-        # Chúng ta dùng .get("raw", 0) để lấy nó
-        val = raw_turbidity.get("raw", 0)
-        result["turbidity"] = val
+        result["turbidity"] = raw_turbidity.get("raw", raw_turbidity.get("turbidity", 0))
 
-    # Logic tự động hóa bơm (Giữ nguyên)
-    if result["water"] < 2000:
-        auto_pump_status = True
-    elif result["water"] >= 4096:
-        auto_pump_status = False
+    if raw_ph:
+        # API pH thường trả về key: "ph", "val", "value"
+        # Chúng ta ưu tiên tìm "ph" trước
+        val_ph = raw_ph.get("ph", raw_ph.get("value", raw_ph.get("val", 0)))
+        result["ph"] = val_ph
+
+    # 5. Logic tự động hóa bơm (Giữ nguyên)
+    try:
+        water_level = float(result["water"])
+        if water_level < 2000:
+            auto_pump_status = True
+        elif water_level >= 4096:
+            auto_pump_status = False
+    except:
+        pass
 
     result["pump_auto"] = auto_pump_status
-    
     return jsonify(result)
 
-# 4.5 API MỚI: Cung cấp dữ liệu lịch sử cho biểu đồ
-# ... (Phần import và code cũ giữ nguyên) ...
 
+# ============================================================
+# 2. CẬP NHẬT HÀM GET_CHART_DATA
+# ============================================================
 @app.route('/api/get_chart_data')
 @login_required
 def get_chart_data():
-    # 1. Định nghĩa link lấy TOÀN BỘ dữ liệu lịch sử
+    # Định nghĩa link
     url_turbidity_all = "http://nhungapi.laptrinhpython.net/api/turbidity/all"
     url_temp_hum_all = "http://nhungapi.laptrinhpython.net/api/temperature_humidity/all"
     url_water_all = "http://nhungapi.laptrinhpython.net/api/water/all"
+    url_ph_all = "http://nhungapi.laptrinhpython.net/api/ph/all"
 
-    # 2. Hàm phụ trợ để lấy list dữ liệu an toàn
+    # Hàm fetch list nội bộ
     def fetch_list(url):
         try:
             resp = requests.get(url, timeout=3)
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list):
-                    return data
+            if resp.status_code == 200 and isinstance(resp.json(), list):
+                return resp.json()
             return []
         except:
             return []
 
-    # 3. Lấy dữ liệu từ 3 nguồn
+    # Lấy dữ liệu
     list_turbidity = fetch_list(url_turbidity_all)
     list_temp_hum = fetch_list(url_temp_hum_all)
     list_water = fetch_list(url_water_all)
+    list_ph = fetch_list(url_ph_all) #
 
-    # 4. Xử lý dữ liệu: Chỉ lấy 20 phần tử CUỐI CÙNG (Mới nhất)
-    # Lưu ý: Các API này có thể có số lượng bản ghi khác nhau, ta lấy theo list_temp_hum làm chuẩn
+    # Cắt 20 mẫu cuối
     limit = 20
-    
-    # Cắt 20 phần tử cuối
     data_temp_hum = list_temp_hum[-limit:] 
     data_water = list_water[-limit:]
     data_turbidity = list_turbidity[-limit:]
+    data_ph = list_ph[-limit:] #
 
-    # 5. Chuẩn bị mảng để vẽ
-    labels = []       # Trục hoành (Thời gian)
-    temps = []        # Nhiệt độ
-    hums = []         # Độ ẩm
-    waters = []       # Mực nước
-    turbidities = []  # Độ đục
+    # Chuẩn bị mảng
+    labels = []
+    temps = []
+    hums = []
+    waters = []
+    turbidities = []
+    phs = [] #
 
-    # Duyệt qua danh sách nhiệt độ để tạo khung thời gian
+    # Loop xử lý Temp/Hum & Label
     for item in data_temp_hum:
-        # Giả sử API trả về field 'created_at' hoặc 'time', nếu không ta dùng số thứ tự
-        # Ở đây ta lấy giờ từ chuỗi thời gian nếu có, hoặc để trống
-        time_str = item.get('created_at', '') # Bạn cần kiểm tra key thực tế của API
-        # Nếu time_str dài quá, ta cắt bớt chỉ lấy giờ:phút:giây
-        if len(time_str) > 10:
-             time_str = time_str[11:19] 
-        
+        time_str = item.get('created_at', '') or item.get('timestamp', '')
+        if len(time_str) > 10: time_str = time_str[11:19]
         labels.append(time_str)
         temps.append(item.get('temperature', 0))
         hums.append(item.get('humidity', 0))
 
-    # Xử lý riêng cho Mực nước (vì list có thể lệch nhau, ta chỉ map theo index)
+    # Loop xử lý Water
     for item in data_water:
         waters.append(item.get('distance', item.get('value', 0)))
     
-    # Xử lý riêng cho Độ đục (SỬA LẠI ĐOẠN NÀY)
+    # Loop xử lý Turbidity
     for item in data_turbidity:
-        # Lấy giá trị từ key "raw"
         turbidities.append(item.get('raw', 0))
 
-    # Trả về JSON
+    # Loop xử lý pH
+    for item in data_ph:
+        val = item.get('ph', item.get('value', 0))
+        phs.append(val)
+
     return jsonify({
-        "labels": labels,
-        "temps": temps,
-        "hums": hums,
-        "waters": waters,
-        "turbidities": turbidities
+        "labels": labels, "temps": temps, "hums": hums, 
+        "waters": waters, "turbidities": turbidities,
+        "phs": phs #
     })
 
 # API DÀNH RIÊNG CHO SERVER GATEWAY
@@ -290,4 +304,5 @@ def gateway_command():
     })
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    port = int(os.getenv("DASHBOARD_PORT", "3000"))
+    app.run(debug=True, host='0.0.0.0', port=port)

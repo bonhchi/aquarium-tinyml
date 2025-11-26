@@ -19,7 +19,7 @@ import random
 import shutil
 import time
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List
@@ -52,8 +52,8 @@ METRICS_OUT = "ml/artifacts/metrics.json"
 LABEL_ENCODER_OUT = "ml/artifacts/label_encoder.joblib"
 RUN_ARCHIVE_ROOT = Path("ml/artifacts/runs")
 
-EPOCHS = 50
-BATCH_SIZE = 32
+EPOCHS = 125  # theo mẫu trong RUN_PROJECT.txt
+BATCH_SIZE = 64
 TEST_SIZE = 0.15
 VAL_SIZE = 0.15
 RANDOM_STATE = 42
@@ -64,6 +64,7 @@ class TrainingConfig:
     """Tập hợp các tham số để job training có thể tuỳ biến."""
 
     input_file: str = INPUT_FILE
+    extra_datasets: List[str] = field(default_factory=list)
     model_out: str = MODEL_OUT
     metrics_out: str = METRICS_OUT
     label_encoder_out: str = LABEL_ENCODER_OUT
@@ -72,6 +73,9 @@ class TrainingConfig:
     test_size: float = TEST_SIZE
     val_size: float = VAL_SIZE
     random_state: int = RANDOM_STATE
+    push_adjustment_url: Optional[str] = None
+    pond_id: Optional[str] = None
+    model_id: Optional[str] = None
 
 
 # =============================================================
@@ -84,23 +88,60 @@ def set_global_seed(seed: int) -> None:
     tf.random.set_seed(seed)
 
 
-def load_dataset(file_path: str = INPUT_FILE):
-    """Đọc và tách dữ liệu thành X, y kèm danh sách cột đặc trưng."""
+def load_dataset(file_path: str = INPUT_FILE, extra_paths: Optional[List[str]] = None):
+    """Đọc và ghép dataset chính + danh sách extra, trả về X, y, feature_cols, encoder.
+
+    - extra_paths: danh sách CSV bổ sung (vd. dataset/gateway/gateway_samples.csv).
+    - Các cột không có trong file chính sẽ bị bỏ, cột thiếu sẽ được fill NA.
+    """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Không tìm thấy file {file_path}")
 
     df = pd.read_csv(file_path)
+    base_columns = list(df.columns)
     if "label" not in df.columns:
-        raise ValueError("Thiếu cột 'label' trong dataset")
+        raise ValueError("Thiếu cột 'label' trong dataset chính")
 
-    feature_cols = [c for c in df.columns if c not in ["timestamp", "label", "source_file"]]
-    X = df[feature_cols].values.astype(np.float32)
-    y = df["label"].values
+    frames = [df]
+    extra_paths = extra_paths or []
+    for path in extra_paths:
+        if not path:
+            continue
+        if not os.path.exists(path):
+            print(f"[warn] Bỏ qua extra dataset (không tồn tại): {path}")
+            continue
+        extra_df = pd.read_csv(path)
+        # điền cột thiếu để khớp schema file chính
+        for col in base_columns:
+            if col not in extra_df.columns:
+                extra_df[col] = np.nan
+        extra_df = extra_df[base_columns]
+        frames.append(extra_df)
+        print(f"[debug] Nối thêm {len(extra_df)} dòng từ {path}")
+
+    df_all = pd.concat(frames, ignore_index=True)
+    # Bỏ các dòng chưa có label (gateway thu thập nhưng chưa gán nhãn)
+    before_drop = len(df_all)
+    df_all = df_all[df_all["label"].notna() & (df_all["label"].astype(str).str.len() > 0)]
+    dropped = before_drop - len(df_all)
+    if dropped:
+        print(f"[debug] Đã bỏ {dropped} dòng chưa có label trước khi train")
+
+    # Danh sách cột đặc trưng: bỏ timestamp/label/source/meta
+    exclude_cols = {"timestamp", "label", "source_file", "dataset_type", "meta_json"}
+    feature_cols = [c for c in df_all.columns if c not in exclude_cols]
+    # Ép numeric an toàn cho các cột feature
+    for col in feature_cols:
+        df_all[col] = pd.to_numeric(df_all[col], errors="coerce")
+    df_all[feature_cols] = df_all[feature_cols].fillna(0.0)
+
+    X = df_all[feature_cols].values.astype(np.float32)
+    y = df_all["label"].values
 
     encoder = LabelEncoder()
     y = encoder.fit_transform(y)  # mặc định GOOD -> 1, BAD -> 0
 
-    print(f"Tổng dữ liệu: {X.shape[0]} mẫu, {X.shape[1]} đặc trưng")
+    print(f"Tổng dữ liệu sau ghép: {X.shape[0]} mẫu, {X.shape[1]} đặc trưng")
     return X, y, feature_cols, encoder
 
 
@@ -273,6 +314,35 @@ def archive_training_run(
     return run_dir
 
 
+def _push_adjustment(cfg: TrainingConfig, metrics_payload: Dict[str, Any]) -> None:
+    """Đẩy kết quả train sang Gateway Main nếu có cấu hình URL."""
+    if not cfg.push_adjustment_url:
+        return
+    try:
+        import requests  # type: ignore
+    except Exception:
+        print("[warn] Không tìm thấy thư viện requests, bỏ qua push adjustment")
+        return
+
+    body = {
+        "pond_id": cfg.pond_id or "pond-unknown",
+        "model_id": cfg.model_id or Path(cfg.model_out).stem,
+        "recommendation": {
+            "status": "trained",
+            "metrics_file": cfg.metrics_out,
+            "model_file": cfg.model_out,
+        },
+        "metrics": metrics_payload,
+        "note": "auto-push from train_core",
+    }
+    try:
+        resp = requests.post(cfg.push_adjustment_url, json=body, timeout=5)
+        resp.raise_for_status()
+        print(f"[debug] Đã gửi kết quả train tới {cfg.push_adjustment_url}: {resp.status_code}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Push adjustment thất bại: {exc}")
+
+
 # =============================================================
 # Hàm chính
 # =============================================================
@@ -290,7 +360,7 @@ def train_model(
 
     set_global_seed(cfg.random_state)
 
-    X, y, feature_cols, encoder = load_dataset(cfg.input_file)
+    X, y, feature_cols, encoder = load_dataset(cfg.input_file, cfg.extra_datasets)
     print(f"Sử dụng {len(feature_cols)} đặc trưng: {feature_cols}")
 
     X_train, X_tmp, y_train, y_tmp = train_test_split(
@@ -367,12 +437,19 @@ def train_model(
         epoch_history_path=epoch_history_path,
     )
     summary["runDir"] = str(run_dir)
+    _push_adjustment(cfg, metrics_payload)
     return summary
 
 
 def _parse_cli_args():
     parser = argparse.ArgumentParser(description="Huấn luyện TinyML model.")
     parser.add_argument("--input-file", default=INPUT_FILE, help="Đường dẫn CSV đặc trưng")
+    parser.add_argument(
+        "--extra-dataset",
+        action="append",
+        default=[],
+        help="CSV bổ sung (vd. dataset/gateway/gateway_samples.csv), có thể truyền nhiều lần",
+    )
     parser.add_argument("--model-out", default=MODEL_OUT, help="Đường dẫn lưu model .keras")
     parser.add_argument("--metrics-out", default=METRICS_OUT, help="Đường dẫn lưu metrics.json")
     parser.add_argument(
@@ -385,6 +462,17 @@ def _parse_cli_args():
     parser.add_argument("--test-size", type=float, default=TEST_SIZE)
     parser.add_argument("--val-size", type=float, default=VAL_SIZE)
     parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
+    parser.add_argument(
+        "--push-adjustment-url",
+        default=os.getenv("PUSH_ADJUSTMENT_URL", ""),
+        help="Nếu set, sau khi train sẽ POST metrics về Gateway Main (vd. http://127.0.0.1:5001/api/model/adjustment)",
+    )
+    parser.add_argument("--pond-id", default=os.getenv("POND_ID", ""), help="Pond ID cho payload adjustment")
+    parser.add_argument(
+        "--model-id",
+        default=os.getenv("MODEL_ID", ""),
+        help="Model ID cho payload adjustment (mặc định lấy tên file model_out)",
+    )
     return parser.parse_args()
 
 
@@ -392,6 +480,7 @@ if __name__ == "__main__":
     cli_args = _parse_cli_args()
     cfg = TrainingConfig(
         input_file=cli_args.input_file,
+        extra_datasets=cli_args.extra_dataset,
         model_out=cli_args.model_out,
         metrics_out=cli_args.metrics_out,
         label_encoder_out=cli_args.label_encoder_out,
@@ -400,5 +489,8 @@ if __name__ == "__main__":
         test_size=cli_args.test_size,
         val_size=cli_args.val_size,
         random_state=cli_args.random_state,
+        push_adjustment_url=cli_args.push_adjustment_url or None,
+        pond_id=cli_args.pond_id or None,
+        model_id=cli_args.model_id or None,
     )
     train_model(cfg)

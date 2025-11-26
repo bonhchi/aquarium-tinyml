@@ -1,10 +1,40 @@
+import csv
+import json
 import os
+from datetime import datetime, timedelta
+from pathlib import Path
 
-from flask import Flask, request, jsonify, render_template_string, url_for
+from flask import Flask, jsonify, render_template_string, request, url_for
 
-from database import SessionLocal, Turbidity, TemperatureHumidity, Water, get_vietnam_time
+from database import SessionLocal, TemperatureHumidity, Turbidity, Water, get_vietnam_time
 
 app = Flask(__name__)
+
+# Thư mục lưu export / log cho bundle và kết quả điều chỉnh
+BASE_DIR = Path(__file__).resolve().parents[3]
+EXPORT_DIR = BASE_DIR / "dataset" / "live_exports"
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+BUNDLE_JSONL = EXPORT_DIR / "bundle_telemetry.jsonl"
+ADJUST_JSONL = EXPORT_DIR / "adjustment_results.jsonl"
+LOG_RESULT_DIR = Path(__file__).resolve().parent / "log"
+LOG_RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def append_jsonl(path: Path, row: dict) -> None:
+    """Ghi thêm một dòng JSONL (UTF-8)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def parse_ts(value: str | None) -> datetime:
+    """Chuyển đổi timestamp ISO nếu có, fallback về VN time hiện tại."""
+    if not value:
+        return get_vietnam_time()
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return get_vietnam_time()
 
 
 def build_swagger_spec():
@@ -77,9 +107,158 @@ def build_swagger_spec():
                     "type": "object",
                     "properties": {"status": {"type": "string", "example": "ok"}},
                 },
+                "TelemetryBundlePayload": {
+                    "type": "object",
+                    "required": ["device_id"],
+                    "properties": {
+                        "device_id": {"type": "string", "example": "gateway-total-01"},
+                        "timestamp": {
+                            "type": "string",
+                            "format": "date-time",
+                            "example": "2025-01-01T12:00:00",
+                        },
+                        "temperature": {"type": "number", "example": 28.5},
+                        "humidity": {"type": "number", "example": 76.2},
+                        "turbidity_raw": {"type": "number", "example": 512},
+                        "turbidity_ntu": {"type": "number", "example": 4.3},
+                        "water_value": {"type": "number", "example": 1234},
+                        "meta": {
+                            "type": "object",
+                            "additionalProperties": True,
+                            "example": {"site_id": "pond-01", "note": "live"},
+                        },
+                    },
+                },
+                "TelemetryBundleResponse": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "example": "ok"},
+                        "storedRows": {"type": "integer", "example": 3},
+                        "bundleLogged": {"type": "boolean", "example": True},
+                    },
+                },
+                "TrainingExportResponse": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string"},
+                        "count": {"type": "integer", "example": 120},
+                        "csv": {"type": "string", "example": "dataset/live_exports/bundle_export_1700000000.csv"},
+                        "minutes": {"type": "integer", "example": 10},
+                        "dataset_type": {"type": "string", "example": "train_live"},
+                    },
+                },
+                "AdjustmentPayload": {
+                    "type": "object",
+                    "required": ["pond_id", "model_id", "recommendation"],
+                    "properties": {
+                        "pond_id": {"type": "string", "example": "pond-01"},
+                        "model_id": {"type": "string", "example": "aquarium_v1"},
+                        "recommendation": {
+                            "type": "object",
+                            "description": "Kết quả model sau xử lý, ví dụ hành động bơm/chiếu sáng.",
+                            "example": {"pump": "ON", "aeration": "LOW", "confidence": 0.91},
+                        },
+                        "metrics": {
+                            "type": "object",
+                            "description": "Thông tin train/validation hoặc threshold đi kèm.",
+                            "example": {"f1": 0.88, "loss": 0.12},
+                        },
+                        "note": {"type": "string", "example": "auto-adjust from ML gateway"},
+                    },
+                },
+                "AdjustmentResponse": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "example": "ok"},
+                        "stored": {"type": "boolean", "example": True},
+                    },
+                },
             }
         },
         "paths": {
+            "/api/telemetry/bundle": {
+                "post": {
+                    "summary": "Submit bundled telemetry (tổng hợp tất cả cảm biến)",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/TelemetryBundlePayload"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Accepted & stored",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/TelemetryBundleResponse"
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+            "/api/telemetry/export": {
+                "get": {
+                    "summary": "Xuất CSV 10 phút gần nhất từ bundle telemetry",
+                    "parameters": [
+                        {
+                            "name": "minutes",
+                            "in": "query",
+                            "schema": {"type": "integer", "default": 10},
+                            "required": False,
+                            "description": "Khoảng thời gian (phút) cần lấy dữ liệu",
+                        },
+                        {
+                            "name": "dataset_type",
+                            "in": "query",
+                            "schema": {"type": "string", "default": "train_live"},
+                            "required": False,
+                            "description": "Nhãn phân biệt dữ liệu train thực tế / còn lại",
+                        },
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "CSV path và số dòng",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/TrainingExportResponse"
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+            "/api/model/adjustment": {
+                "post": {
+                    "summary": "Nhận kết quả điều chỉnh từ model/ML gateway",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/AdjustmentPayload"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Lưu log kết quả điều chỉnh",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/AdjustmentResponse"
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
             "/api/turbidity": {
                 "post": {
                     "summary": "Submit turbidity reading",
@@ -238,6 +417,155 @@ SWAGGER_UI_TEMPLATE = """
   </body>
 </html>
 """
+
+
+@app.route("/api/telemetry/bundle", methods=["POST"])
+def receive_telemetry_bundle():
+    """
+    Nhận gói telemetry tổng (temp/hum/turbidity/water) và lưu vào từng bảng + log JSONL.
+    """
+    payload = request.get_json(force=True)
+    ts = parse_ts(payload.get("timestamp"))
+    device_id = payload.get("device_id") or "gateway-total"
+    dataset_type = payload.get("dataset_type", "live_bundle")
+
+    session = SessionLocal()
+    created_rows = 0
+    try:
+        if payload.get("turbidity_raw") is not None or payload.get("turbidity_ntu") is not None:
+            session.add(
+                Turbidity(
+                    device_id=device_id,
+                    raw=payload.get("turbidity_raw"),
+                    ntu=payload.get("turbidity_ntu"),
+                    timestamp=ts,
+                )
+            )
+            created_rows += 1
+
+        if payload.get("temperature") is not None or payload.get("humidity") is not None:
+            session.add(
+                TemperatureHumidity(
+                    device_id=device_id,
+                    temperature=payload.get("temperature"),
+                    humidity=payload.get("humidity"),
+                    timestamp=ts,
+                )
+            )
+            created_rows += 1
+
+        water_value = payload.get("water_value")
+        if water_value is None:
+            water_value = payload.get("water")
+        if water_value is not None:
+            session.add(
+                Water(
+                    device_id=device_id,
+                    value=water_value,
+                    timestamp=ts,
+                )
+            )
+            created_rows += 1
+
+        if created_rows:
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    bundle_row = {
+        "timestamp": ts.isoformat(),
+        "device_id": device_id,
+        "temperature": payload.get("temperature"),
+        "humidity": payload.get("humidity"),
+        "turbidity_raw": payload.get("turbidity_raw"),
+        "turbidity_ntu": payload.get("turbidity_ntu"),
+        "water_value": water_value,
+        "dataset_type": dataset_type,
+        "meta": payload.get("meta") or {},
+    }
+    append_jsonl(BUNDLE_JSONL, bundle_row)
+
+    return jsonify({"status": "ok", "storedRows": created_rows, "bundleLogged": True}), 200
+
+
+@app.route("/api/telemetry/export")
+def export_bundle_csv():
+    """
+    Xuất CSV từ bundle telemetry trong khoảng N phút (mặc định 10).
+    """
+    minutes = int(request.args.get("minutes", 10))
+    dataset_type = request.args.get("dataset_type", "train_live")
+    cutoff = get_vietnam_time() - timedelta(minutes=minutes)
+
+    rows: list[dict] = []
+    if BUNDLE_JSONL.exists():
+        with BUNDLE_JSONL.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                    ts = parse_ts(obj.get("timestamp"))
+                    if ts >= cutoff:
+                        obj["dataset_type"] = dataset_type
+                        rows.append(obj)
+                except Exception:
+                    continue
+
+    if not rows:
+        return jsonify({"status": "empty", "count": 0, "csv": None, "minutes": minutes})
+
+    csv_path = EXPORT_DIR / f"bundle_export_{int(get_vietnam_time().timestamp())}.csv"
+    fieldnames = [
+        "timestamp",
+        "device_id",
+        "temperature",
+        "humidity",
+        "turbidity_raw",
+        "turbidity_ntu",
+        "water_value",
+        "dataset_type",
+        "meta",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k) for k in fieldnames})
+
+    return jsonify(
+        {
+            "status": "ok",
+            "count": len(rows),
+            "csv": str(csv_path.relative_to(BASE_DIR)),
+            "minutes": minutes,
+            "dataset_type": dataset_type,
+        }
+    )
+
+
+@app.route("/api/model/adjustment", methods=["POST"])
+def receive_model_adjustment():
+    """
+    Nhận kết quả/khuyến nghị điều chỉnh từ model sau train hoặc từ ML gateway.
+    """
+    payload = request.get_json(force=True)
+    record = {
+        "received_at": get_vietnam_time().isoformat(),
+        "pond_id": payload.get("pond_id"),
+        "model_id": payload.get("model_id"),
+        "recommendation": payload.get("recommendation"),
+        "metrics": payload.get("metrics"),
+        "note": payload.get("note"),
+    }
+    append_jsonl(ADJUST_JSONL, record)
+    timestamp = get_vietnam_time().strftime("%Y%m%d-%H%M%S")
+    log_path = LOG_RESULT_DIR / f"log_result_{timestamp}.json"
+    with log_path.open("w", encoding="utf-8") as fh:
+        json.dump(record, fh, ensure_ascii=False, indent=2)
+    return jsonify({"status": "ok", "stored": True, "log_path": str(log_path)}), 200
+
 
 @app.route("/api/turbidity", methods=["POST"])
 def receive_turbidity():

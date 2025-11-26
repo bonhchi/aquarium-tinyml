@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     TRAINING_DATA_FILE: Path = Path(
         "./dataset/interim/aquarium_tinyml_features.csv"
     )  # default file làm đầu vào train
+    GATEWAY_DATA_DIR: Path = Path("./dataset/gateway")  # nơi lưu sample thu thập từ gateway
+    GATEWAY_CSV: Path = Path("./dataset/gateway/gateway_samples.csv")
 
     class Config:
         env_file = ".env"
@@ -35,3 +37,4 @@ settings.DATA_ROOT.mkdir(parents=True, exist_ok=True)
 (settings.DATA_ROOT / "raw").mkdir(parents=True, exist_ok=True)
 settings.META_DIR.mkdir(parents=True, exist_ok=True)
 settings.TRAINING_DATA_FILE = _resolve_training_file(settings)
+settings.GATEWAY_DATA_DIR.mkdir(parents=True, exist_ok=True)

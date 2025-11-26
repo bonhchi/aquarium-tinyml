@@ -55,6 +55,54 @@ Chạy riêng training pipeline (CMD/Terminal)
 - Khi chỉ cần huấn luyện lại model: `python src/ml/train/train_core.py` (đang đọc config mặc định trong file).
 - Các bước hậu xử lý (quantize, export header) có thể chạy thủ công qua `python src/ml/train/quantize.py` và `python src/ml/train/export_header.py`.
 
+Full flow thu thập → ML → training → push kết quả
+-------------------------------------------------
+1. **Gateway Main gom dữ liệu 10 phút một lần** (hiện tại lấy từ DB, sau này chuyển sang nguồn realtime). Ví dụ:
+   ```bash
+   curl "http://127.0.0.1:5001/api/telemetry/export?minutes=10&dataset_type=train_live" -o /tmp/bundle.json
+   ```
+   Hoặc gửi trực tiếp sang Gateway ML (không qua file):
+   ```bash
+   curl -X POST http://127.0.0.1:5000/ingest/gateway-sample \
+     -H "Content-Type: application/json" \
+     -d '{"device_id":"gateway-01","temperature":28.5,"humidity":76,"turbidity_raw":510,"turbidity_ntu":4.2,"water_value":1234,"ph":7.1,"timestamp":"2025-01-01T12:00:00"}'
+   ```
+   → ML sẽ append vào `dataset/gateway/gateway_samples.csv` và log JSONL để debug.
+
+2. **Chạy training kết hợp dataset label + gateway** (tham số giống JSON mẫu, có thể chỉnh bằng flag). Ví dụ:
+   ```bash
+   python src/ml/train/train_core.py \
+     --input-file dataset/interim/aquarium_tinyml_features.csv \
+     --extra-dataset dataset/gateway/gateway_samples.csv \
+     --model-out ml/artifacts/aquarium_classifier.keras \
+     --metrics-out ml/artifacts/aquarium_classifier_metrics.json \
+     --label-encoder-out ml/artifacts/label_encoder.joblib \
+     --epochs 125 --batch-size 64 --val-size 0.15 --test-size 0.15 --random-state 42 \
+     --push-adjustment-url http://127.0.0.1:5001/api/model/adjustment \
+     --pond-id pond-01 --model-id aquarium_v1
+   ```
+   Nếu không muốn push kết quả tự động thì bỏ 3 flag cuối (`--push-adjustment-url`, `--pond-id`, `--model-id`).
+
+3. **Xem log/metrics**: logging nằm ở `ml/training_logs/*.log`, metrics JSON tại `ml/artifacts/aquarium_classifier_metrics.json`, run snapshot tại `ml/artifacts/runs/<timestamp>/`.
+
+4. **Kết quả training sẽ POST về Gateway Main** (hoặc tự gọi):
+   ```bash
+   curl -X POST http://127.0.0.1:5001/api/model/adjustment \
+     -H "Content-Type: application/json" \
+     -d @ml/artifacts/aquarium_classifier_metrics.json
+   ```
+   (payload thực tế sẽ là kết quả train_core gửi với đầy đủ thông tin model/metrices). Gateway Main log lại tại `dataset/live_exports/adjustment_results.jsonl`. ESP32 có thể đọc lệnh từ các API `/api/...` hiện hữu hoặc endpoint `api/gateway/command`.
+
+Checkpoint & log phục vụ tinh chỉnh
+------------------------------------
+- **Checkpoint model**: sau mỗi lần train, toàn bộ snapshot nằm trong `ml/artifacts/runs/<timestamp>-<suffix>/` (gồm model `.keras`, metrics, history). Chỉ cần copy folder này để giữ “bản tốt nhất”.
+- **Log job**: `ml/training_logs/*.log` chứa console output, file `_epochs.json` ghi thời gian từng epoch để so sánh giữa các run.
+- **Metrics chính thức**: `ml/artifacts/aquarium_classifier_metrics.json` luôn lưu classification report, confusion matrix, class weights → chính là payload gửi sang Gateway Main.
+- **Bản ghi gửi Gateway Main**: mỗi lần `/api/model/adjustment` nhận payload sẽ:
+  1. Append JSONL vào `dataset/live_exports/adjustment_results.jsonl`.
+  2. Ghi một file chi tiết `dataset/live_exports/log_result/log_result_<timestamp>.json` (timestamp giờ VN) giúp audit/rollback và làm checkpoint tinh chỉnh hồ nước.
+- Từ log_result có thể map ngược về run folder tương ứng (dựa vào `model_id`/`metrics_file`) để tải lại model hoặc điều chỉnh threshold theo yêu cầu.
+
 Troubleshooting
 ---------------
 - `{"detail":"Not Found"}`: bạn mở root `/` của FastAPI; hãy dùng `/docs` hoặc `/health`.
@@ -79,4 +127,21 @@ Json Mẫu training
   "testSize": 0.15,
   "randomState": 42,
   "notes": "Baseline training run on full feature CSV"
+}
+
+{
+        "datasetFile": "dataset/labeled/aquarium_tinyml_dataset_labeled_sample.csv",
+        "extraDatasets": ["dataset/gateway/gateway_samples.csv"],
+        "modelOut": "ml/artifacts/aquarium_classifier.keras",
+        "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
+        "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
+        "epochs": 125,
+        "batchSize": 64,
+        "valSize": 0.15,
+        "testSize": 0.15,
+        "randomState": 42,
+        "pushAdjustmentUrl": "http://127.0.0.1:5001/api/model/adjustment",
+        "pondId": "pond-01",
+        "modelId": "aquarium_v1",
+        "notes": "Trigger từ API"
 }
