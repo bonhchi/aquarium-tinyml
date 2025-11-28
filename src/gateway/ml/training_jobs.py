@@ -63,6 +63,12 @@ def _merge_training_config(body: TrainingJobConfigPayload) -> TrainingConfig:
         cfg.test_size = data["testSize"]
     if data.get("randomState") is not None:
         cfg.random_state = data["randomState"]
+    if data.get("useEarlyStopping") is not None:
+        cfg.use_early_stopping = data["useEarlyStopping"]
+    if data.get("earlyStopPatience") is not None:
+        cfg.early_stop_patience = data["earlyStopPatience"]
+    if data.get("reduceLrPatience") is not None:
+        cfg.reduce_lr_patience = data["reduceLrPatience"]
     if data.get("pushAdjustmentUrl"):
         cfg.push_adjustment_url = data["pushAdjustmentUrl"]
     if data.get("pondId"):

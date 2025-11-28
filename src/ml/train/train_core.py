@@ -57,6 +57,9 @@ BATCH_SIZE = 64
 TEST_SIZE = 0.15
 VAL_SIZE = 0.15
 RANDOM_STATE = 42
+USE_EARLY_STOPPING = False
+EARLY_STOP_PATIENCE = 40
+REDUCE_LR_PATIENCE = 10
 
 
 @dataclass
@@ -73,6 +76,9 @@ class TrainingConfig:
     test_size: float = TEST_SIZE
     val_size: float = VAL_SIZE
     random_state: int = RANDOM_STATE
+    use_early_stopping: bool = USE_EARLY_STOPPING
+    early_stop_patience: int = EARLY_STOP_PATIENCE
+    reduce_lr_patience: int = REDUCE_LR_PATIENCE
     push_adjustment_url: Optional[str] = None
     pond_id: Optional[str] = None
     model_id: Optional[str] = None
@@ -145,19 +151,42 @@ def load_dataset(file_path: str = INPUT_FILE, extra_paths: Optional[List[str]] =
     return X, y, feature_cols, encoder
 
 
-def build_tiny_mlp(input_dim: int):
-    """Khởi tạo MLP nhỏ gọn cho TinyML (dạng binary sigmoid)."""
-    model = keras.Sequential(
-        [
-            keras.layers.Input(shape=(input_dim,), name="input"),
-            keras.layers.Dense(32, activation="relu", name="dense_1"),
-            keras.layers.Dropout(0.2),
-            keras.layers.Dense(16, activation="relu", name="dense_2"),
-            keras.layers.Dense(1, activation="sigmoid", name="output"),
-        ]
-    )
+def build_tiny_mlp(input_dim: int, normalization_data: Optional[np.ndarray] = None):
+    """Khởi tạo MLP nhỏ gọn có chuẩn hoá đầu vào để học ổn định hơn."""
+    inputs = keras.layers.Input(shape=(input_dim,), name="input")
+    x = inputs
+
+    if normalization_data is not None:
+        norm_layer = keras.layers.Normalization(name="feature_norm")
+        norm_layer.adapt(normalization_data)
+        x = norm_layer(x)
+
+    x = keras.layers.Dense(
+        64,
+        activation="relu",
+        kernel_initializer="he_normal",
+        kernel_regularizer=keras.regularizers.l2(1e-4),
+        name="dense_1",
+    )(x)
+    x = keras.layers.BatchNormalization(name="bn_1")(x)
+    x = keras.layers.Dropout(0.3, name="dropout_1")(x)
+
+    x = keras.layers.Dense(
+        32,
+        activation="relu",
+        kernel_initializer="he_normal",
+        kernel_regularizer=keras.regularizers.l2(1e-4),
+        name="dense_2",
+    )(x)
+    x = keras.layers.BatchNormalization(name="bn_2")(x)
+    x = keras.layers.Dropout(0.2, name="dropout_2")(x)
+
+    x = keras.layers.Dense(16, activation="relu", name="dense_3")(x)
+    outputs = keras.layers.Dense(1, activation="sigmoid", name="output")(x)
+    model = keras.Model(inputs=inputs, outputs=outputs, name="aquarium_tinyml_mlp")
+
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=1e-3),
+        optimizer=keras.optimizers.Adam(learning_rate=5e-4),
         loss="binary_crossentropy",
         metrics=[
             keras.metrics.BinaryAccuracy(name="accuracy"),
@@ -174,6 +203,24 @@ def build_class_weights(labels: np.ndarray) -> Dict[int, float]:
     classes = np.unique(labels)
     weights = compute_class_weight(class_weight="balanced", classes=classes, y=labels)
     return {int(cls): float(weight) for cls, weight in zip(classes, weights)}
+
+
+def _normalize_report_keys(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Đổi key dict về dạng snake_case (thay space/hyphen bằng underscore)."""
+
+    def convert_key(key: Any) -> Any:
+        if isinstance(key, str):
+            return key.replace(" ", "_").replace("-", "_")
+        return key
+
+    def recurse(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {convert_key(k): recurse(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [recurse(v) for v in value]
+        return value
+
+    return recurse(payload)
 
 
 def save_metrics(
@@ -202,6 +249,7 @@ def save_metrics(
         output_dict=True,
         zero_division=0,
     )
+    report = _normalize_report_keys(report)
     matrix = confusion_matrix(y_test, preds).tolist()
     results["classification_report"] = report
     results["confusion_matrix"] = matrix
@@ -384,8 +432,29 @@ def train_model(
     class_weights = build_class_weights(y_train)
     print(f"Class weights (train): {class_weights}")
 
-    model = build_tiny_mlp(X_train.shape[1])
+    model = build_tiny_mlp(X_train.shape[1], normalization_data=X_train)
     timing_callback = EpochTimingCallback()
+    callbacks: List[keras.callbacks.Callback] = [timing_callback]
+
+    if cfg.reduce_lr_patience and cfg.reduce_lr_patience > 0:
+        lr_scheduler = keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=cfg.reduce_lr_patience,
+            min_lr=1e-5,
+            verbose=1,
+        )
+        callbacks.append(lr_scheduler)
+
+    if cfg.use_early_stopping:
+        early_stop = keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=max(1, cfg.early_stop_patience),
+            restore_best_weights=True,
+            verbose=1,
+            min_delta=1e-3,
+        )
+        callbacks.append(early_stop)
     history = model.fit(
         X_train,
         y_train,
@@ -393,7 +462,7 @@ def train_model(
         epochs=cfg.epochs,
         batch_size=cfg.batch_size,
         verbose=2,
-        callbacks=[timing_callback],
+        callbacks=callbacks,
         class_weight=class_weights,
     )
     if epoch_history_path:
@@ -463,6 +532,23 @@ def _parse_cli_args():
     parser.add_argument("--val-size", type=float, default=VAL_SIZE)
     parser.add_argument("--random-state", type=int, default=RANDOM_STATE)
     parser.add_argument(
+        "--enable-early-stopping",
+        action="store_true",
+        help="Bật early stopping (mặc định tắt để train đủ epoch).",
+    )
+    parser.add_argument(
+        "--early-stop-patience",
+        type=int,
+        default=EARLY_STOP_PATIENCE,
+        help="Số epoch không cải thiện trước khi early stopping kích hoạt.",
+    )
+    parser.add_argument(
+        "--reduce-lr-patience",
+        type=int,
+        default=REDUCE_LR_PATIENCE,
+        help="Số epoch không cải thiện trước khi giảm learning rate (0 để tắt).",
+    )
+    parser.add_argument(
         "--push-adjustment-url",
         default=os.getenv("PUSH_ADJUSTMENT_URL", ""),
         help="Nếu set, sau khi train sẽ POST metrics về Gateway Main (vd. http://127.0.0.1:5001/api/model/adjustment)",
@@ -489,6 +575,9 @@ if __name__ == "__main__":
         test_size=cli_args.test_size,
         val_size=cli_args.val_size,
         random_state=cli_args.random_state,
+        use_early_stopping=cli_args.enable_early_stopping,
+        early_stop_patience=cli_args.early_stop_patience,
+        reduce_lr_patience=cli_args.reduce_lr_patience,
         push_adjustment_url=cli_args.push_adjustment_url or None,
         pond_id=cli_args.pond_id or None,
         model_id=cli_args.model_id or None,

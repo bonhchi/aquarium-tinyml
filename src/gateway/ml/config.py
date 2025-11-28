@@ -1,7 +1,7 @@
 # ai_gateway/config.py
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -14,8 +14,7 @@ class Settings(BaseSettings):
     GATEWAY_DATA_DIR: Path = Path("./dataset/gateway")  # nơi lưu sample thu thập từ gateway
     GATEWAY_CSV: Path = Path("./dataset/gateway/gateway_samples.csv")
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 def _resolve_training_file(cfg: Settings) -> Path:

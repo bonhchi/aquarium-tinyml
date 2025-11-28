@@ -113,6 +113,15 @@ class TrainingJobConfigPayload(BaseModel):
     valSize: Optional[float] = Field(None, gt=0, lt=1)
     testSize: Optional[float] = Field(None, gt=0, lt=1)
     randomState: Optional[int] = Field(None, description="Seed tái lập kết quả")
+    useEarlyStopping: Optional[bool] = Field(
+        None, description="Bật/tắt early stopping (mặc định tắt để chạy đủ epoch)"
+    )
+    earlyStopPatience: Optional[int] = Field(
+        None, ge=1, le=300, description="Patience của early stopping nếu bật"
+    )
+    reduceLrPatience: Optional[int] = Field(
+        None, ge=0, le=300, description="Số epoch không cải thiện trước khi giảm LR (0 = tắt)"
+    )
     pushAdjustmentUrl: Optional[str] = Field(
         None,
         description="Nếu set, sau khi train sẽ POST metrics về Gateway Main (vd. http://127.0.0.1:5001/api/model/adjustment)",

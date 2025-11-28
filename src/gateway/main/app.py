@@ -1,14 +1,30 @@
 import csv
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Dict, Tuple, Optional
 
+import pytz
 from flask import Flask, jsonify, render_template_string, request, url_for
 
-from database import SessionLocal, TemperatureHumidity, Turbidity, Water, get_vietnam_time
+from database import (
+    Prediction,
+    PredictionSessionLocal,
+    SessionLocal,
+    TemperatureHumidity,
+    Turbidity,
+    Water,
+    get_vietnam_time,
+)
 
 app = Flask(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("gateway.main")
 
 # Thư mục lưu export / log cho bundle và kết quả điều chỉnh
 BASE_DIR = Path(__file__).resolve().parents[3]
@@ -18,6 +34,7 @@ BUNDLE_JSONL = EXPORT_DIR / "bundle_telemetry.jsonl"
 ADJUST_JSONL = EXPORT_DIR / "adjustment_results.jsonl"
 LOG_RESULT_DIR = Path(__file__).resolve().parent / "log"
 LOG_RESULT_DIR.mkdir(parents=True, exist_ok=True)
+VN_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
 
 
 def append_jsonl(path: Path, row: dict) -> None:
@@ -35,6 +52,301 @@ def parse_ts(value: str | None) -> datetime:
         return datetime.fromisoformat(value)
     except Exception:
         return get_vietnam_time()
+
+
+def _get_latest_bundle() -> dict:
+    """Đọc bundle telemetry mới nhất (nếu có)."""
+    if not BUNDLE_JSONL.exists():
+        return {}
+    last_line = ""
+    with BUNDLE_JSONL.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            last_line = line
+    try:
+        return json.loads(last_line) if last_line else {}
+    except Exception:
+        return {}
+
+
+def _parse_request_timestamp(value) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=VN_TZ)
+    if isinstance(value, str):
+        text_value = value.strip()
+        if text_value.endswith("Z"):
+            text_value = text_value[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text_value)
+        except ValueError:
+            try:
+                dt = datetime.fromtimestamp(float(text_value), tz=VN_TZ)
+            except ValueError:
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=VN_TZ)
+        else:
+            dt = dt.astimezone(VN_TZ)
+        return dt
+    return None
+
+
+def _fetch_snapshot_by_timestamp(ts_value) -> Tuple[Optional[dict], Optional[str]]:
+    target_dt = _parse_request_timestamp(ts_value)
+    if not target_dt:
+        return None, "invalid_timestamp"
+
+    session = PredictionSessionLocal()
+    row = None
+    try:
+        row = (
+            session.query(Prediction)
+            .filter(Prediction.timestamp <= target_dt)
+            .order_by(Prediction.timestamp.desc())
+            .first()
+        )
+        if not row:
+            row = (
+                session.query(Prediction)
+                .filter(Prediction.timestamp >= target_dt)
+                .order_by(Prediction.timestamp.asc())
+                .first()
+            )
+    finally:
+        session.close()
+
+    if not row:
+        return None, "not_found"
+
+    snapshot = row.raw_payload or {}
+    snapshot.setdefault("pond_id", row.pond_id)
+    snapshot.setdefault("timestamp", row.timestamp.isoformat())
+    snapshot.setdefault("model_id", snapshot.get("model_id", "unknown"))
+    if "prediction" not in snapshot:
+        snapshot["prediction"] = {}
+    return snapshot, None
+
+
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _extract_sensor_snapshot(bundle: dict | None) -> dict:
+    bundle = bundle or {}
+    meta = bundle.get("meta") or {}
+    return {
+        "temperature_c": _safe_float(bundle.get("temperature")),
+        "humidity_percent": _safe_float(bundle.get("humidity")),
+        "turbidity_ntu": _safe_float(bundle.get("turbidity_ntu", bundle.get("turbidity_raw"))),
+        "water_level_cm": _safe_float(bundle.get("water_value", bundle.get("water"))),
+        "ph": _safe_float(bundle.get("ph", meta.get("ph"))),
+    }
+
+
+def derive_predicted_adjustments(metrics: dict | None, latest_bundle: dict | None = None) -> dict:
+    """Suy luận thông số điều chỉnh gợi ý từ payload metrics + giá trị cảm biến mới nhất."""
+    if not metrics:
+        metrics = {}
+    latest_bundle = latest_bundle or _get_latest_bundle()
+
+    classification = metrics.get("classification_report") or {}
+    bad_stats = classification.get("BAD", {})
+    good_stats = classification.get("GOOD", {})
+    weighted_stats = classification.get("weighted_avg", {})
+
+    accuracy = float(metrics.get("test_accuracy") or classification.get("accuracy") or 0.0)
+    bad_recall = float(bad_stats.get("recall") or 0.0)
+    bad_precision = float(bad_stats.get("precision") or 0.0)
+    good_recall = float(good_stats.get("recall") or 0.0)
+    good_precision = float(good_stats.get("precision") or 0.0)
+    weighted_f1 = float(weighted_stats.get("f1_score") or 0.0)
+
+    if bad_recall < 0.75:
+        pump_mode = "boost"
+        pump_targets = [14, 20]
+    elif bad_recall > 0.9 and bad_precision > 0.45:
+        pump_mode = "relax"
+        pump_targets = [10, 16]
+    else:
+        pump_mode = "maintain"
+        pump_targets = [12, 18]
+
+    if good_recall < 0.8:
+        aeration_mode = "boost"
+        oxygen_target = 6.2
+    elif good_recall > 0.9 and good_precision > 0.95:
+        aeration_mode = "eco"
+        oxygen_target = 5.0
+    else:
+        aeration_mode = "stabilize"
+        oxygen_target = 5.6
+
+    if accuracy >= 0.9:
+        sampling_interval = 10
+    elif accuracy >= 0.85:
+        sampling_interval = 7
+    else:
+        sampling_interval = 5
+
+    alert_threshold = max(0.1, round(1 - accuracy, 2))
+
+    ph_target = 7.1
+    if weighted_f1 < 0.8:
+        ph_target = 7.25
+    elif weighted_f1 > 0.88:
+        ph_target = 7.0
+
+    notes = []
+    if pump_mode == "boost":
+        notes.append("Bad-class recall thấp, tăng độ nhạy bơm để xử lý mực nước bất thường.")
+    if aeration_mode == "boost":
+        notes.append("AER nhu cầu cao do recall GOOD thấp.")
+    if not notes:
+        notes.append("Giữ các tham số vận hành hiện tại, chỉ tinh chỉnh ngưỡng cảnh báo.")
+
+    sensor_targets = {
+        "temperature_c": {"range": [24, 30], "note": "Duy trì trong 24-30°C"},
+        "humidity_percent": {"range": [60, 85], "note": "Không khí ổn định cho thiết bị"},
+        "turbidity_ntu": {"range": [0, 15], "note": "Giữ nước trong, kiểm tra nếu >20 NTU"},
+        "water_level_cm": {"range": pump_targets, "note": "Khoảng mực nước mục tiêu bơm tự động"},
+        "ph": {"range": [6.8, 7.4], "note": "Giữ pH trung tính; lệch nhiều cần hiệu chỉnh"},
+    }
+
+    # Ước đoán cảm biến cần ưu tiên dựa trên giá trị mới nhất (nếu có)
+    latest_temp = latest_bundle.get("temperature")
+    latest_hum = latest_bundle.get("humidity")
+    latest_turbidity = latest_bundle.get("turbidity_ntu") or latest_bundle.get("turbidity_raw")
+    latest_water = latest_bundle.get("water_value") or latest_bundle.get("water")
+    latest_ph = latest_bundle.get("ph") or (latest_bundle.get("meta") or {}).get("ph")
+
+    def _out_of_range(val, low, high):
+        return val is not None and (val < low or val > high)
+
+    sensor_alerts = []
+    if _out_of_range(latest_temp, 24, 30):
+        sensor_alerts.append({"sensor": "temperature", "current": latest_temp, "action": "kiểm tra sưởi/làm mát"})
+    if _out_of_range(latest_hum, 60, 85):
+        sensor_alerts.append({"sensor": "humidity", "current": latest_hum, "action": "kiểm tra thông gió"})
+    if _out_of_range(latest_turbidity, 0, 20):
+        sensor_alerts.append({"sensor": "turbidity", "current": latest_turbidity, "action": "lọc nước/tăng lưu thông"})
+    if _out_of_range(latest_water, pump_targets[0], pump_targets[1]):
+        sensor_alerts.append({"sensor": "water_level", "current": latest_water, "action": "điều chỉnh bơm"})
+    if _out_of_range(latest_ph, 6.8, 7.4):
+        sensor_alerts.append({"sensor": "ph", "current": latest_ph, "action": "hiệu chỉnh pH (đệm/bổ sung nước)"})
+
+    # Ước tính thiếu oxy khi nước đục cao hoặc pH lệch, dù chưa có cảm biến DO
+    oxygen_risk = "normal"
+    oxygen_reason = "Không có cảm biến oxy; suy luận từ độ đục/pH."
+    if latest_turbidity is not None and latest_turbidity > 30:
+        oxygen_risk = "high"
+        oxygen_reason = "Độ đục cao → nguy cơ DO thấp, cần tăng sục khí."
+    elif latest_ph is not None and (latest_ph < 6.5 or latest_ph > 8.0):
+        oxygen_risk = "medium"
+        oxygen_reason = "pH lệch → có thể ảnh hưởng hấp thụ oxy, theo dõi và sục khí."
+
+    return {
+        "model_confidence": round(accuracy, 3),
+        "pump_adjustment": {
+            "mode": pump_mode,
+            "target_water_cm": pump_targets,
+            "failure_recall": round(bad_recall, 3),
+        },
+        "aeration_adjustment": {
+            "mode": aeration_mode,
+            "dissolved_oxygen_target_mg_per_l": oxygen_target,
+            "healthy_recall": round(good_recall, 3),
+        },
+        "sensor_sampling": {
+            "interval_minutes": sampling_interval,
+            "adaptive": accuracy >= 0.9,
+        },
+        "alerting": {
+            "anomaly_threshold": alert_threshold,
+            "expected_bad_events_per_day": round(max(0.5, (1 - good_precision) * 10), 2),
+        },
+        "ph_target": round(ph_target, 2),
+        "sensor_targets": sensor_targets,
+        "sensor_alerts": sensor_alerts,
+        "oxygen_assessment": {"risk": oxygen_risk, "reason": oxygen_reason},
+        "notes": " ".join(notes),
+    }
+
+
+def build_adjustment_snapshot(
+    payload: dict,
+    predicted: dict,
+    sensor_values: dict,
+) -> dict:
+    """Chuẩn hóa JSON trả về cho gateway/ESP theo mẫu yêu cầu."""
+    confidence = predicted.get("model_confidence", 0.0)
+    status = "GOOD" if confidence >= 0.85 else "BAD"
+
+    oxygen_risk = (predicted.get("oxygen_assessment") or {}).get("risk", "normal")
+    risk_map = {"high": "critical", "medium": "warning", "normal": "normal"}
+    risk_level = risk_map.get(oxygen_risk, "normal")
+    if predicted.get("sensor_alerts"):
+        risk_level = "warning" if risk_level == "normal" else risk_level
+
+    alerts = []
+    for alert in predicted.get("sensor_alerts", []):
+        sensor = alert.get("sensor", "sensor")
+        current = alert.get("current")
+        message = alert.get("action", "kiểm tra")
+        severity = "warning"
+        if sensor == "water_level" and abs((sensor_values.get("water_level_cm") or 0) - 15) > 5:
+            severity = "critical"
+        alerts.append(
+            {
+                "type": sensor,
+                "message": f"{message} (giá trị hiện tại: {current})",
+                "severity": severity,
+            }
+        )
+
+    snapshot = {
+        "pond_id": payload.get("pond_id"),
+        "model_id": payload.get("model_id"),
+        "timestamp": get_vietnam_time().isoformat(),
+        "prediction": {
+            "status": status,
+            "score": round(confidence, 3),
+            "risk_level": risk_level,
+        },
+        "adjustments": {
+            "pump": predicted.get("pump_adjustment", {}),
+            "aeration": predicted.get("aeration_adjustment", {}),
+            "sampling": predicted.get("sensor_sampling", {}),
+            "ph_target": predicted.get("ph_target"),
+        },
+        "telemetry": sensor_values,
+        "alerts": alerts,
+    }
+    return snapshot
+
+
+def _read_adjustment_logs(limit: int | None = None) -> list[dict[str, Any]]:
+    """Đọc adjustment log từ JSONL, mới nhất đứng trước."""
+    if not ADJUST_JSONL.exists():
+        return []
+
+    rows: list[dict[str, Any]] = []
+    with ADJUST_JSONL.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+
+    rows = list(reversed(rows))
+    if limit is not None:
+        rows = rows[:limit]
+    return rows
 
 
 def build_swagger_spec():
@@ -149,24 +461,67 @@ def build_swagger_spec():
                 },
                 "AdjustmentPayload": {
                     "type": "object",
-                    "required": ["pond_id", "model_id", "recommendation"],
+                    "required": ["timestamp"],
                     "properties": {
-                        "pond_id": {"type": "string", "example": "pond-01"},
-                        "model_id": {"type": "string", "example": "aquarium_v1"},
-                        "recommendation": {
-                            "type": "object",
-                            "description": "Kết quả model sau xử lý, ví dụ hành động bơm/chiếu sáng.",
-                            "example": {"pump": "ON", "aeration": "LOW", "confidence": 0.91},
-                        },
-                        "metrics": {
-                            "type": "object",
-                            "description": "Thông tin train/validation hoặc threshold đi kèm.",
-                            "example": {"f1": 0.88, "loss": 0.12},
-                        },
-                        "note": {"type": "string", "example": "auto-adjust from ML gateway"},
+                        "timestamp": {
+                            "type": "string",
+                            "description": "ISO timestamp cần truy vấn snapshot",
+                            "example": "2025-11-28T21:52:25.750943+07:00",
+                        }
                     },
                 },
                 "AdjustmentResponse": {
+                    "type": "object",
+                    "properties": {
+                        "pond_id": {"type": "string", "example": "pond-01"},
+                        "model_id": {"type": "string", "example": "aquarium_v1"},
+                        "timestamp": {"type": "string", "example": "2025-11-28T21:52:25.750943+07:00"},
+                        "prediction": {
+                            "type": "object",
+                            "properties": {
+                                "status": {"type": "string", "example": "GOOD"},
+                                "score": {"type": "number", "example": 0.893},
+                                "risk_level": {"type": "string", "example": "normal"},
+                            },
+                        },
+                        "adjustments": {
+                            "type": "object",
+                            "properties": {
+                                "pump": {
+                                    "type": "object",
+                                    "properties": {
+                                        "mode": {"type": "string", "example": "maintain"},
+                                        "target_water_cm": {"type": "array", "items": {"type": "number"}},
+                                    },
+                                },
+                                "aeration": {
+                                    "type": "object",
+                                    "properties": {
+                                        "mode": {"type": "string", "example": "stabilize"},
+                                        "dissolved_oxygen_target_mg_per_l": {"type": "number", "example": 5.6},
+                                    },
+                                },
+                                "sampling": {
+                                    "type": "object",
+                                    "properties": {"interval_minutes": {"type": "number", "example": 7}},
+                                },
+                                "ph_target": {"type": "number", "example": 7.0},
+                            },
+                        },
+                        "alerts": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {"type": "string", "example": "water_level"},
+                                    "message": {"type": "string", "example": "Mực nước lệch khỏi 12-18 cm"},
+                                    "severity": {"type": "string", "example": "warning"},
+                                },
+                            },
+                        },
+                    },
+                },
+                "AdjustmentStoredResponse": {
                     "type": "object",
                     "properties": {
                         "status": {"type": "string", "example": "ok"},
@@ -236,7 +591,7 @@ def build_swagger_spec():
             },
             "/api/model/adjustment": {
                 "post": {
-                    "summary": "Nhận kết quả điều chỉnh từ model/ML gateway",
+                    "summary": "Trả snapshot điều chỉnh theo timestamp đã lưu",
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -247,7 +602,7 @@ def build_swagger_spec():
                     },
                     "responses": {
                         "200": {
-                            "description": "Lưu log kết quả điều chỉnh",
+                            "description": "Snapshot theo timestamp",
                             "content": {
                                 "application/json": {
                                     "schema": {
@@ -429,7 +784,7 @@ def receive_telemetry_bundle():
     device_id = payload.get("device_id") or "gateway-total"
     dataset_type = payload.get("dataset_type", "live_bundle")
 
-    session = SessionLocal()
+    session = PredictionSessionLocal()
     created_rows = 0
     try:
         if payload.get("turbidity_raw") is not None or payload.get("turbidity_ntu") is not None:
@@ -548,15 +903,42 @@ def export_bundle_csv():
 @app.route("/api/model/adjustment", methods=["POST"])
 def receive_model_adjustment():
     """
-    Nhận kết quả/khuyến nghị điều chỉnh từ model sau train hoặc từ ML gateway.
+    - Nếu payload chỉ gồm timestamp: trả snapshot đã lưu tương ứng.
+    - Ngược lại: lưu log điều chỉnh giống trước đây.
     """
     payload = request.get_json(force=True)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "error", "message": "payload phải là JSON object"}), 400
+
+    if set(payload.keys()) == {"timestamp"}:
+        snapshot, error = _fetch_snapshot_by_timestamp(payload.get("timestamp"))
+        if error == "invalid_timestamp":
+            return jsonify({"status": "error", "message": "timestamp không hợp lệ"}), 400
+        if error == "not_found" or snapshot is None:
+            return jsonify({"status": "not_found", "message": "Không tìm thấy snapshot cho timestamp đã cho"}), 404
+        return jsonify(snapshot), 200
+
+    metrics_payload = payload.get("metrics")
+    latest_bundle = _get_latest_bundle()
+    sensor_values = _extract_sensor_snapshot(latest_bundle)
+    predicted = derive_predicted_adjustments(metrics_payload, latest_bundle=latest_bundle)
+    snapshot = build_adjustment_snapshot(payload, predicted, sensor_values)
+    logger.info(
+        "Model adjustment received for pond=%s model=%s score=%.3f",
+        snapshot.get("pond_id"),
+        snapshot.get("model_id"),
+        (predicted or {}).get("model_confidence", 0.0),
+    )
+    if not any(sensor_values.values()):
+        logger.warning("No recent telemetry found for pond %s; snapshot telemetry empty.", snapshot.get("pond_id"))
     record = {
         "received_at": get_vietnam_time().isoformat(),
         "pond_id": payload.get("pond_id"),
         "model_id": payload.get("model_id"),
         "recommendation": payload.get("recommendation"),
-        "metrics": payload.get("metrics"),
+        "metrics": metrics_payload,
+        "predicted_adjustments": predicted,
+        "snapshot": snapshot,
         "note": payload.get("note"),
     }
     append_jsonl(ADJUST_JSONL, record)
@@ -564,7 +946,57 @@ def receive_model_adjustment():
     log_path = LOG_RESULT_DIR / f"log_result_{timestamp}.json"
     with log_path.open("w", encoding="utf-8") as fh:
         json.dump(record, fh, ensure_ascii=False, indent=2)
-    return jsonify({"status": "ok", "stored": True, "log_path": str(log_path)}), 200
+    # Lưu snapshot xuống bảng predictions
+    session = PredictionSessionLocal()
+    try:
+        prediction_row = Prediction(
+            pond_id=snapshot.get("pond_id"),
+            timestamp=get_vietnam_time(),
+            temperature_c=sensor_values.get("temperature_c"),
+            ph=sensor_values.get("ph"),
+            turbidity_ntu=sensor_values.get("turbidity_ntu"),
+            water_level_cm=sensor_values.get("water_level_cm"),
+            humidity_percent=sensor_values.get("humidity_percent"),
+            raw_payload=snapshot,
+        )
+        session.add(prediction_row)
+        session.commit()
+        logger.info(
+            "Saved prediction snapshot id=%s pond=%s temp=%.2f ph=%.2f water=%.2f",
+            prediction_row.id,
+            prediction_row.pond_id,
+            prediction_row.temperature_c or float("nan"),
+            prediction_row.ph or float("nan"),
+            prediction_row.water_level_cm or float("nan"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        session.rollback()
+        logger.warning("Không thể lưu snapshot vào bảng predictions: %s", exc)
+    finally:
+        session.close()
+    return jsonify(snapshot), 200
+
+
+@app.route("/api/model/adjustment/logs", methods=["GET"])
+def list_adjustment_logs():
+    """
+    Trả về danh sách log adjustment (mặc định 50 dòng mới nhất).
+    """
+    limit = request.args.get("limit")
+    limit_int = int(limit) if limit else 50
+    rows = _read_adjustment_logs(limit_int)
+    return jsonify({"count": len(rows), "items": rows})
+
+
+@app.route("/api/model/adjustment/latest", methods=["GET"])
+def latest_adjustment_log():
+    """
+    Trả về bản ghi adjustment mới nhất (nếu có).
+    """
+    rows = _read_adjustment_logs(1)
+    if not rows:
+        return jsonify({"status": "empty"}), 200
+    return jsonify({"status": "ok", "latest": rows[0]})
 
 
 @app.route("/api/turbidity", methods=["POST"])

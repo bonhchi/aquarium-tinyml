@@ -130,18 +130,18 @@ Json Mẫu training
 }
 
 {
-        "datasetFile": "dataset/labeled/aquarium_tinyml_dataset_labeled_sample.csv",
-        "extraDatasets": ["dataset/gateway/gateway_samples.csv"],
-        "modelOut": "ml/artifacts/aquarium_classifier.keras",
-        "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
-        "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
-        "epochs": 125,
-        "batchSize": 64,
-        "valSize": 0.15,
-        "testSize": 0.15,
-        "randomState": 42,
-        "pushAdjustmentUrl": "http://127.0.0.1:5001/api/model/adjustment",
-        "pondId": "pond-01",
-        "modelId": "aquarium_v1",
-        "notes": "Trigger từ API"
+   "datasetFile": "dataset/labeled/aquarium_tinyml_dataset_labeled_sample.csv",
+   "extraDatasets": ["dataset/gateway/gateway_samples.csv"],
+   "modelOut": "ml/artifacts/aquarium_classifier.keras",
+   "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
+   "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
+   "epochs": 125,
+   "batchSize": 64,
+   "valSize": 0.15,
+   "testSize": 0.15,
+   "randomState": 42,
+   "pushAdjustmentUrl": "http://127.0.0.1:5001/api/model/adjustment",
+   "pondId": "pond-01",
+   "modelId": "aquarium_v1",
+   "notes": "Trigger từ API"
 }

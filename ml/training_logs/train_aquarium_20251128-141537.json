@@ -1,0 +1,49 @@
+{
+  "jobId": "fca34e07801148aa80c89a06a8ff5c98",
+  "status": "succeeded",
+  "startedAt": "2025-11-28T14:15:37.573841Z",
+  "finishedAt": "2025-11-28T14:15:52.910455Z",
+  "logPath": "ml\\training_logs\\train_aquarium_20251128-141537.log",
+  "epochHistoryPath": "ml\\training_logs\\train_aquarium_20251128-141537_epochs.json",
+  "result": {
+    "modelPath": "ml/artifacts/aquarium_classifier.keras",
+    "metricsPath": "ml/artifacts/aquarium_classifier_metrics.json",
+    "labelEncoderPath": "ml/artifacts/label_encoder.joblib",
+    "trainSamples": 3150,
+    "valSamples": 675,
+    "testSamples": 675,
+    "features": [
+      "temp_c",
+      "ph",
+      "tds_ppm",
+      "turbidity_ntu",
+      "orp_mV",
+      "lux",
+      "aerator_on",
+      "pump_on",
+      "hour",
+      "is_daylight"
+    ],
+    "runDir": "ml\\artifacts\\runs\\20251128-141552-a39a5b"
+  },
+  "error": null,
+  "notes": "Trigger t\u1eeb API",
+  "config": {
+    "datasetFile": "dataset/labeled/aquarium_tinyml_dataset_labeled_sample.csv",
+    "extraDatasets": [
+      "dataset/gateway/gateway_samples.csv"
+    ],
+    "modelOut": "ml/artifacts/aquarium_classifier.keras",
+    "metricsOut": "ml/artifacts/aquarium_classifier_metrics.json",
+    "labelEncoderOut": "ml/artifacts/label_encoder.joblib",
+    "epochs": 125,
+    "batchSize": 64,
+    "valSize": 0.15,
+    "testSize": 0.15,
+    "randomState": 42,
+    "pushAdjustmentUrl": "http://127.0.0.1:5001/api/model/adjustment",
+    "pondId": "pond-01",
+    "modelId": "aquarium_v1",
+    "notes": "Trigger t\u1eeb API"
+  }
+}

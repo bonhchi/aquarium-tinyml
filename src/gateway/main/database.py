@@ -1,12 +1,22 @@
-from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    JSON,
+    String,
+    Index,
+    create_engine,
+)
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import pytz
 
-# engine = create_engine("sqlite:///signal.db")
-engine = create_engine("mysql+pymysql://nhom2:uitstudent@mysql.csc.edu.vn/SignalAPI")  # Sử dụng pymysql driver
+engine = create_engine("mysql+pymysql://nhom2:uitstudent@mysql.csc.edu.vn/SignalAPI")
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine)
+PredictionSessionLocal = SessionLocal
 
 
 def get_vietnam_time():
@@ -42,5 +52,22 @@ class Water(Base):
     device_id = Column(String(50))
     value = Column(Integer)
     timestamp = Column(DateTime, default=get_vietnam_time)
+
+
+class Prediction(Base):
+    __tablename__ = "predictions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    pond_id = Column(String(50), nullable=False, index=True)
+    timestamp = Column(DateTime, default=get_vietnam_time, nullable=False)
+    temperature_c = Column(Float)
+    ph = Column(Float)
+    turbidity_ntu = Column(Float)
+    water_level_cm = Column(Float)
+    humidity_percent = Column(Float)
+    raw_payload = Column(JSON)
+    created_at = Column(DateTime, default=get_vietnam_time)
+
+    __table_args__ = (Index("idx_pond_time", "pond_id", "timestamp"),)
 
 Base.metadata.create_all(engine)
